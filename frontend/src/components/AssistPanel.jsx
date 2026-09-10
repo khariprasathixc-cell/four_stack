@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { API_BASE } from '../config';
 
 export default function AssistPanel({
   zoneName = 'Target Region',
@@ -287,10 +288,9 @@ export default function AssistPanel({
 
   // Dispatch motion telemetry to backend /api/assist/motion
   const sendMotionTelemetry = async (levelPct, alertFlag, box) => {
-    if (!activeApiUrl) return;
     setIsTelemetrySending(true);
     try {
-      await fetch(`${activeApiUrl}/api/assist/motion`, {
+      await fetch(`${API_BASE}/assist/motion`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

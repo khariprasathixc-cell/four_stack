@@ -9,7 +9,7 @@ import SosPanel from './components/SosPanel';
 import AssistPanel from './components/AssistPanel';
 import DispatchLogPanel from './components/DispatchLogPanel';
 
-const DEFAULT_API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8001';
+import { API_BASE } from './config';
 
 const PRESET_NAMES_MAP = {
   '11.5540,76.1306': 'Wayanad, Kerala (High Hazard Zone)',
@@ -79,8 +79,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
   // Backend connectivity
   const [health, setHealth] = useState(null);
   const [isBackendConnected, setIsBackendConnected] = useState(false);
-  const [activeApiUrl, setActiveApiUrl] = useState(DEFAULT_API_URL);
-  const activeApiUrlRef = useRef(DEFAULT_API_URL);
+  const activeApiUrl = API_BASE;
 
   // Fused risk level and derived geofence radius
   const overallRisk = riskData?.overall_risk || 'High';
@@ -91,9 +90,9 @@ export default function Dashboard({ onNavigateToSosLogs }) {
     discoverBackendAndInit();
   }, []);
 
-  const fetchServerLogs = async (baseUrl) => {
+  const fetchServerLogs = async () => {
     try {
-      const res = await fetch(`${baseUrl}/api/sos-logs`);
+      const res = await fetch(`${API_BASE}/sos-logs`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
@@ -120,52 +119,38 @@ export default function Dashboard({ onNavigateToSosLogs }) {
   };
 
   const discoverBackendAndInit = async () => {
-    const candidates = Array.from(
-      new Set([
-        DEFAULT_API_URL,
-        'http://localhost:8001',
-        'http://127.0.0.1:8001',
-        'http://localhost:8000',
-        'http://127.0.0.1:8000',
-      ])
-    ).filter(Boolean);
-
-    let workingUrl = null;
-
-    for (const candidate of candidates) {
-      try {
-        const res = await fetch(`${candidate}/api/health`, { method: 'GET' });
-        if (res.ok) {
-          const data = await res.json();
-          setHealth(data);
-          setIsBackendConnected(true);
-          workingUrl = candidate;
-          setActiveApiUrl(candidate);
-          activeApiUrlRef.current = candidate;
-          console.log(`[Slope-to-Rescue] Connected to backend at ${candidate}`);
-          break;
-        }
-      } catch (e) {
-        // Try next candidate
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      if (res.ok) {
+        const data = await res.json();
+        setHealth(data);
+        setIsBackendConnected(true);
+        console.log(`[Slope-to-Rescue] Connected to backend API at ${API_BASE}`);
+        analyzeRisk(parseFloat(lat), parseFloat(lon), parseFloat(radius));
+        fetchServerLogs();
+        return;
       }
+    } catch (e) {
+      console.warn(`Health check at ${API_BASE} failed:`, e);
     }
 
-    if (workingUrl) {
-      analyzeRisk(parseFloat(lat), parseFloat(lon), parseFloat(radius), workingUrl);
-      fetchServerLogs(workingUrl);
-    } else {
+    // Try risk analysis directly even if health check had a transient issue
+    try {
+      await analyzeRisk(parseFloat(lat), parseFloat(lon), parseFloat(radius));
+      setIsBackendConnected(true);
+      fetchServerLogs();
+    } catch (err) {
       setIsBackendConnected(false);
       setErrorMessage(
-        `Backend not reachable at ${DEFAULT_API_URL}. Ensure FastAPI backend is running on port 8001 (or 8000).`
+        `Backend API not reachable at ${API_BASE}. Ensure backend service is running.`
       );
     }
   };
 
   // Single source of truth for risk assessment
-  const analyzeRisk = async (targetLat, targetLon, targetRadius, overrideUrl = null) => {
+  const analyzeRisk = async (targetLat, targetLon, targetRadius) => {
     setIsLoading(true);
     setErrorMessage(null);
-    const baseUrl = overrideUrl || activeApiUrlRef.current || DEFAULT_API_URL;
 
     // Detect if preset
     const key = `${targetLat.toFixed(4)},${targetLon.toFixed(4)}`;
@@ -173,7 +158,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
     setCurrentZoneName(matchedName);
 
     try {
-      const url = `${baseUrl}/api/risk?lat=${targetLat}&lon=${targetLon}&radius_km=${targetRadius}`;
+      const url = `${API_BASE}/risk?lat=${targetLat}&lon=${targetLon}&radius_km=${targetRadius}`;
       const res = await fetch(url);
 
       if (!res.ok) {
@@ -189,8 +174,9 @@ export default function Dashboard({ onNavigateToSosLogs }) {
     } catch (err) {
       console.error('Error fetching risk analysis:', err);
       setErrorMessage(
-        err.message || `Failed to fetch risk analysis from ${baseUrl}. Ensure backend is running on port 8001.`
+        err.message || `Failed to fetch risk analysis from ${API_BASE}/risk.`
       );
+      throw err;
     } finally {
       setIsLoading(false);
     }

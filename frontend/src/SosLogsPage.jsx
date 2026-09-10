@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { API_BASE } from './config';
 
 export default function SosLogsPage({ onNavigateToDashboard }) {
   const [logs, setLogs] = useState([]);
@@ -23,41 +24,18 @@ export default function SosLogsPage({ onNavigateToDashboard }) {
       console.warn('Could not parse localStorage logs:', e);
     }
 
-    // 2. Fetch from backend /api/sos-logs
+    // 2. Fetch from backend API /api/sos-logs
     try {
-      const res = await fetch('/api/sos-logs');
+      const res = await fetch(`${API_BASE}/sos-logs`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
           serverLogs = data;
           setStorageSource('server');
         }
-      } else {
-        // Try localhost:8001 if in local dev with different port
-        try {
-          const resLocal = await fetch('http://localhost:8001/api/sos-logs');
-          if (resLocal.ok) {
-            const dataLocal = await resLocal.json();
-            if (Array.isArray(dataLocal)) {
-              serverLogs = dataLocal;
-              setStorageSource('server');
-            }
-          }
-        } catch {}
       }
     } catch (err) {
-      console.warn('Failed to fetch /api/sos-logs:', err);
-      // Try localhost fallback
-      try {
-        const resLocal = await fetch('http://localhost:8001/api/sos-logs');
-        if (resLocal.ok) {
-          const dataLocal = await resLocal.json();
-          if (Array.isArray(dataLocal)) {
-            serverLogs = dataLocal;
-            setStorageSource('server');
-          }
-        }
-      } catch {}
+      console.warn(`Failed to fetch ${API_BASE}/sos-logs:`, err);
     }
 
     // 3. Deduplicate and merge (server logs priority, augmented with any local-only logs)

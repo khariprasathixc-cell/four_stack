@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { API_BASE } from '../config';
 
 // Haversine formula to compute great-circle distance in km
 function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
@@ -133,7 +134,7 @@ export default function SosPanel({
         userDistanceKm: gpsStatus ? gpsStatus.distanceKm : null,
       };
 
-      const res = await fetch(`${activeApiUrl}/api/send-alert`, {
+      const res = await fetch(`${API_BASE}/send-alert`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
