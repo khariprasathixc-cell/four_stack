@@ -132,9 +132,12 @@ async def evaluate_combined_risk(lat: float, lon: float, radius_km: float = 3.0)
         "overall_risk": overall_risk,
         "summary": summary_desc,
         "rainfall": rainfall_data,
+        "is_mock": terrain_data.get("is_mock", False) or rainfall_data.get("is_mock", False),
         "terrain": {
             "api_key_configured": terrain_data.get("api_key_configured", False),
             "is_synthetic": terrain_data.get("is_synthetic", False),
+            "is_mock": terrain_data.get("is_mock", False),
+            "data_source": terrain_data.get("data_source", "Terrain Model"),
             "error_code": terrain_data.get("error_code"),
             "error_message": terrain_data.get("error_message"),
             "bounding_box": terrain_data.get("bounding_box"),

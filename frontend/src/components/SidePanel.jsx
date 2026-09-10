@@ -72,7 +72,9 @@ export default function SidePanel({ riskData, isLoading }) {
             <span className="card-icon">🌧️</span>
             <div>
               <h3>Rainfall Saturation</h3>
-              <span className="card-sub">Open-Meteo Live API</span>
+              <span className="card-sub">
+                {rainfall?.data_source || 'Open-Meteo Live API'}
+              </span>
             </div>
           </div>
           <span className={`badge-pill ${rainfall?.rainfall_risk?.toLowerCase()}`}>
@@ -138,12 +140,12 @@ export default function SidePanel({ riskData, isLoading }) {
             <div>
               <h3>Topography & Slope Angle</h3>
               <span className="card-sub">
-                {terrain?.is_synthetic ? 'Synthetic DEM Preview' : 'SRTM 90m Elevation Grid'}
+                {terrain?.data_source || (terrain?.is_synthetic ? 'Synthetic DEM Preview' : 'SRTM 90m Elevation Grid')}
               </span>
             </div>
           </div>
           <span className="data-source-tag">
-            {terrain?.is_synthetic ? 'Preview' : 'OpenTopography'}
+            {terrain?.is_mock ? 'Cached SRTM' : terrain?.is_synthetic ? 'Preview' : 'OpenTopography'}
           </span>
         </div>
 

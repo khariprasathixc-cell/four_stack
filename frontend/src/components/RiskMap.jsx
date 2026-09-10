@@ -1,13 +1,31 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 
-export default function RiskMap({ geojsonData, centerLat, centerLon, radiusKm }) {
+export default function RiskMap({
+  geojsonData,
+  centerLat,
+  centerLon,
+  radiusKm,
+  geofenceRadiusKm = 5.0,
+  showGeofence = false,
+  riskLevel = 'High',
+  userGps = null,
+  zoneName = '',
+}) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
   const geojsonLayerRef = useRef(null);
   const centerMarkerRef = useRef(null);
+  const geofenceCircleRef = useRef(null);
+  const userGpsMarkerRef = useRef(null);
 
   const [activeLayerMode, setActiveLayerMode] = useState('final'); // 'final' | 'terrain'
+  const [forceGeofenceVisible, setForceGeofenceVisible] = useState(showGeofence);
+
+  // Sync internal toggle if showGeofence changes from parent
+  useEffect(() => {
+    setForceGeofenceVisible(showGeofence);
+  }, [showGeofence]);
 
   // Initialize map once
   useEffect(() => {
@@ -23,12 +41,12 @@ export default function RiskMap({ geojsonData, centerLat, centerLon, radiusKm })
       // Add zoom control in top-right
       L.control.zoom({ position: 'topright' }).addTo(map);
 
-      // CartoDB Dark Matter / Positron or standard OpenStreetMap
-      // Dark matter base map provides incredible visual contrast for hazard polygons
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: 'abcd',
-        maxZoom: 19,
+      // OpenTopoMap with built-in topographic contours and hillshading (keyless)
+      L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+        maxZoom: 17,
+        subdomains: 'abc',
+        attribution:
+          'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, <a href="http://viewfinderpanoramas.org">SRTM</a> | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://creativecommons.org/licenses/by-sa/3.0/">CC-BY-SA</a>)',
       }).addTo(map);
 
       mapInstanceRef.current = map;
@@ -43,45 +61,104 @@ export default function RiskMap({ geojsonData, centerLat, centerLon, radiusKm })
     };
   }, []);
 
-  // Update GeoJSON layer and bounds when geojsonData or activeLayerMode changes
+  // Update GeoJSON, Geofence, and Markers
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    // Remove previous GeoJSON layer if it exists
+    // 1. Remove previous layers
     if (geojsonLayerRef.current) {
       map.removeLayer(geojsonLayerRef.current);
       geojsonLayerRef.current = null;
     }
-
-    // Remove previous center marker
     if (centerMarkerRef.current) {
       map.removeLayer(centerMarkerRef.current);
       centerMarkerRef.current = null;
     }
+    if (geofenceCircleRef.current) {
+      map.removeLayer(geofenceCircleRef.current);
+      geofenceCircleRef.current = null;
+    }
+    if (userGpsMarkerRef.current) {
+      map.removeLayer(userGpsMarkerRef.current);
+      userGpsMarkerRef.current = null;
+    }
 
-    // Add center coordinate circle marker
+    // 2. Add Center Coordinate Marker
     if (centerLat && centerLon) {
       const marker = L.circleMarker([centerLat, centerLon], {
-        radius: 7,
+        radius: 8,
         fillColor: '#38bdf8',
         color: '#ffffff',
-        weight: 2,
+        weight: 2.5,
         opacity: 1,
-        fillOpacity: 0.9,
+        fillOpacity: 0.95,
       }).addTo(map);
 
       marker.bindPopup(`
-        <div style="font-family: sans-serif; font-size: 13px; line-height: 1.4;">
-          <strong>Target Center Point</strong><br/>
-          Lat: ${centerLat.toFixed(4)}<br/>
-          Lon: ${centerLon.toFixed(4)}<br/>
-          Radius: ${radiusKm} km
+        <div class="map-center-popup">
+          <strong>🎯 ${zoneName || 'Epicenter Target'}</strong><br/>
+          <span>Lat: ${centerLat.toFixed(4)}°, Lon: ${centerLon.toFixed(4)}°</span><br/>
+          <span>Risk Level: <strong>${riskLevel}</strong></span><br/>
+          <span>Geofence Radius: <strong>${geofenceRadiusKm} km</strong></span>
         </div>
       `);
       centerMarkerRef.current = marker;
     }
 
+    // 3. Render Geofence Circle if enabled
+    if (forceGeofenceVisible && centerLat && centerLon && geofenceRadiusKm > 0) {
+      const radiusMeters = geofenceRadiusKm * 1000;
+      const geofenceColor =
+        riskLevel === 'High' ? '#ef4444' : riskLevel === 'Medium' ? '#f59e0b' : '#10b981';
+
+      const circle = L.circle([centerLat, centerLon], {
+        radius: radiusMeters,
+        color: geofenceColor,
+        weight: 2.5,
+        opacity: 0.85,
+        fillColor: geofenceColor,
+        fillOpacity: 0.12,
+        dashArray: '6, 6',
+        className: 'pulsing-geofence-circle',
+      }).addTo(map);
+
+      circle.bindPopup(`
+        <div class="map-center-popup">
+          <strong style="color: ${geofenceColor}">🚨 SOS Hazard Geofence Perimeter</strong><br/>
+          <span>Radius: <strong>${geofenceRadiusKm} km</strong> (${riskLevel} Risk Scale)</span><br/>
+          <span>Any verified GPS within this circle triggers automated SOS alert dispatch.</span>
+        </div>
+      `);
+      geofenceCircleRef.current = circle;
+    }
+
+    // 4. Render User GPS Marker if verified
+    if (userGps && userGps.lat && userGps.lon) {
+      const userMarker = L.circleMarker([userGps.lat, userGps.lon], {
+        radius: 9,
+        fillColor: userGps.isInside ? '#ef4444' : '#06b6d4',
+        color: '#ffffff',
+        weight: 3,
+        opacity: 1,
+        fillOpacity: 0.95,
+        className: 'user-gps-pulse',
+      }).addTo(map);
+
+      userMarker.bindPopup(`
+        <div class="map-center-popup">
+          <strong>📱 Your Verified GPS Location</strong><br/>
+          <span>Lat: ${userGps.lat.toFixed(4)}°, Lon: ${userGps.lon.toFixed(4)}°</span><br/>
+          <span>Distance to Epicenter: <strong>${userGps.distanceKm != null ? userGps.distanceKm.toFixed(2) : '--'} km</strong></span><br/>
+          <span style="color: ${userGps.isInside ? '#ef4444' : '#10b981'}; font-weight: bold;">
+            ${userGps.isInside ? '⚠️ INSIDE HAZARD GEOFENCE' : '✅ Outside Hazard Perimeter'}
+          </span>
+        </div>
+      `);
+      userGpsMarkerRef.current = userMarker;
+    }
+
+    // 5. Render Terrain Risk GeoJSON
     if (geojsonData && geojsonData.features && geojsonData.features.length > 0) {
       const layer = L.geoJSON(geojsonData, {
         style: (feature) => {
@@ -153,57 +230,79 @@ export default function RiskMap({ geojsonData, centerLat, centerLon, radiusKm })
 
       geojsonLayerRef.current = layer;
 
-      // Fit map to bounds of GeoJSON
+      // Fit map to bounds of GeoJSON or Geofence
       try {
-        const bounds = layer.getBounds();
-        if (bounds.isValid()) {
-          map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
-          setTimeout(() => {
-            if (mapInstanceRef.current) {
-              mapInstanceRef.current.invalidateSize();
-            }
-          }, 150);
+        if (forceGeofenceVisible && geofenceCircleRef.current) {
+          const circleBounds = geofenceCircleRef.current.getBounds();
+          map.fitBounds(circleBounds, { padding: [40, 40], maxZoom: 14 });
+        } else {
+          const bounds = layer.getBounds();
+          if (bounds.isValid()) {
+            map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+          }
         }
+        setTimeout(() => {
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.invalidateSize();
+          }
+        }, 150);
       } catch (err) {
-        console.warn('Could not fit bounds:', err);
+        console.warn('Could not fit map bounds:', err);
       }
     }
-  }, [geojsonData, activeLayerMode, centerLat, centerLon, radiusKm]);
+  }, [
+    geojsonData,
+    activeLayerMode,
+    centerLat,
+    centerLon,
+    radiusKm,
+    geofenceRadiusKm,
+    forceGeofenceVisible,
+    riskLevel,
+    userGps,
+    zoneName,
+  ]);
 
   return (
     <div className="risk-map-wrapper">
       <div className="map-layer-selector">
-        <span className="selector-label">Display Layer:</span>
+        <span className="selector-label">Display Mode:</span>
         <button
           className={`layer-toggle-btn ${activeLayerMode === 'final' ? 'active' : ''}`}
           onClick={() => setActiveLayerMode('final')}
         >
-          Combined Risk (Terrain + Rain)
+          Combined Risk
         </button>
         <button
           className={`layer-toggle-btn ${activeLayerMode === 'terrain' ? 'active' : ''}`}
           onClick={() => setActiveLayerMode('terrain')}
         >
-          Terrain Slope Risk Only
+          Terrain Slope
+        </button>
+        <button
+          className={`layer-toggle-btn geofence-toggle ${forceGeofenceVisible ? 'active' : ''}`}
+          onClick={() => setForceGeofenceVisible(!forceGeofenceVisible)}
+        >
+          {forceGeofenceVisible ? `🛡️ Geofence (${geofenceRadiusKm}km) ON` : '🛡️ Show Geofence'}
         </button>
       </div>
 
       <div id="risk-map-container" ref={mapContainerRef} className="map-container"></div>
 
       <div className="map-legend">
-        <div className="legend-title">Risk Severity</div>
+        <div className="legend-title">Risk Severity & Geofence</div>
         <div className="legend-items">
           <div className="legend-item">
             <span className="legend-color high"></span>
-            <span>High Risk (Steep &gt;35° / Saturated)</span>
+            <span>High Risk (Steep &gt;35° / Saturated) • 5km Geofence</span>
           </div>
           <div className="legend-item">
             <span className="legend-color medium"></span>
-            <span>Medium Risk (15°–35° Slope / Moderate Rain)</span>
+            <span>Medium Risk (15°–35° Slope) • 3km Geofence</span>
           </div>
           <div className="legend-item">
             <span className="legend-color low"></span>
-            <span>Low Risk (&lt;15° Gentle / Saturated Flat)</span>
+            <span>Low Risk (&lt;15° Gentle) • 1km Geofence</span>
           </div>
         </div>
       </div>

@@ -1,0 +1,11 @@
+{
+  "name": "slope-to-rescue",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Slope-to-Rescue: Landslide Early Warning & Risk Prediction System",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "build": "npm --prefix frontend run build"
+  }
+}
