@@ -1,17 +1,43 @@
+import os
 import sys
 from pathlib import Path
 
-# Resolve backend path relative to this file
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-BACKEND_DIR = PROJECT_ROOT / "backend"
+# Resolve all possible backend locations
+CURRENT_FILE = Path(__file__).resolve()
+CURRENT_DIR = CURRENT_FILE.parent
 
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+candidate_paths = [
+    CURRENT_DIR.parent / "backend",
+    CURRENT_DIR / "backend",
+    Path(os.getcwd()) / "backend",
+    CURRENT_DIR.parent,
+    CURRENT_DIR,
+    Path(os.getcwd()),
+]
 
-# Import the configured FastAPI instance
-from backend.main import app
+for p in candidate_paths:
+    if p.exists() and str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
-# Export app for Vercel ASGI runtime
+# Attempt import with progressive fallbacks
+app = None
+import_errors = []
+
+try:
+    from backend.main import app
+except Exception as e1:
+    import_errors.append(f"backend.main failed: {e1}")
+    try:
+        from main import app
+    except Exception as e2:
+        import_errors.append(f"main failed: {e2}")
+
+if app is None:
+    raise RuntimeError(
+        f"FastAPI app failed to load on Vercel.\n"
+        f"Import errors: {import_errors}\n"
+        f"sys.path: {sys.path}\n"
+        f"Current dir: {CURRENT_DIR}, CWD: {os.getcwd()}"
+    )
+
 __all__ = ["app"]
