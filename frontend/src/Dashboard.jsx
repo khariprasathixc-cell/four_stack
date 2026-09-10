@@ -8,6 +8,7 @@ import SidePanel from './components/SidePanel';
 import SosPanel from './components/SosPanel';
 import AssistPanel from './components/AssistPanel';
 import DispatchLogPanel from './components/DispatchLogPanel';
+import PiezoPanel from './components/PiezoPanel';
 
 import { API_BASE } from './config';
 
@@ -75,6 +76,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
   const [sosState, setSosState] = useState('armed'); // 'armed' | 'dispatched' | 'standby'
   const [cameraState, setCameraState] = useState('monitoring'); // 'monitoring' | 'alert' | 'standby'
   const [cameraMotionLevel, setCameraMotionLevel] = useState(0);
+  const [piezoState, setPiezoState] = useState('standby'); // 'standby' | 'monitoring' | 'alert'
 
   // Backend connectivity
   const [health, setHealth] = useState(null);
@@ -190,7 +192,12 @@ export default function Dashboard({ onNavigateToSosLogs }) {
   return (
     <div className="app-layout unified-dashboard-layout">
       {/* 1. Brand Header */}
-      <Header health={health} isBackendConnected={isBackendConnected} />
+      <Header
+        health={health}
+        isBackendConnected={isBackendConnected}
+        piezoState={piezoState}
+        cameraState={cameraState}
+      />
 
       {/* 2. Persistent Top-Level Combined System Status Bar */}
       <StatusBar
@@ -203,6 +210,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
         sosState={sosState}
         cameraState={cameraState}
         motionLevel={cameraMotionLevel}
+        piezoState={piezoState}
         isBackendConnected={isBackendConnected}
       />
 
@@ -221,11 +229,22 @@ export default function Dashboard({ onNavigateToSosLogs }) {
         </button>
 
         <button
+          className={`nav-tab-btn ${activeTab === 'detect' ? 'active' : ''}`}
+          onClick={() => setActiveTab('detect')}
+        >
+          <span className="tab-icon">⚡</span>
+          <span className="tab-text">2. Detect Panel</span>
+          <span className={`tab-pill ${piezoState === 'alert' ? 'alert' : ''}`}>
+            {piezoState === 'alert' ? 'CRACK DETECTED' : 'Piezo Mic-In'}
+          </span>
+        </button>
+
+        <button
           className={`nav-tab-btn ${activeTab === 'sos' ? 'active' : ''}`}
           onClick={() => setActiveTab('sos')}
         >
           <span className="tab-icon">🚨</span>
-          <span className="tab-text">2. SOS Panel</span>
+          <span className="tab-text">3. SOS Panel</span>
           <span className="tab-pill danger">Geofence ({geofenceRadiusKm}km)</span>
         </button>
 
@@ -234,7 +253,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
           onClick={() => setActiveTab('assist')}
         >
           <span className="tab-icon">📹</span>
-          <span className="tab-text">3. Assist Panel</span>
+          <span className="tab-text">4. Assist Panel</span>
           <span className={`tab-pill ${cameraState === 'alert' ? 'alert' : ''}`}>
             Camera Vision
           </span>
@@ -245,7 +264,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
           onClick={() => setActiveTab('dispatch_log')}
         >
           <span className="tab-icon">📋</span>
-          <span className="tab-text">4. SOS Log</span>
+          <span className="tab-text">5. SOS Log</span>
           <span className="tab-pill log-count-pill">{sosLogs.length}</span>
         </button>
 
@@ -310,7 +329,17 @@ export default function Dashboard({ onNavigateToSosLogs }) {
           </div>
         )}
 
-        {/* Panel 2: SOS (Shared Map with Geofence Danger Circle + SOS Dispatcher) */}
+        {/* Panel 2: Detect (27mm Piezo Contact Sensor via 3.5mm Mic Jack) */}
+        {activeTab === 'detect' && (
+          <div className="detect-view-container">
+            <PiezoPanel
+              zoneName={currentZoneName}
+              onPiezoStateChange={setPiezoState}
+            />
+          </div>
+        )}
+
+        {/* Panel 3: SOS (Shared Map with Geofence Danger Circle + SOS Dispatcher) */}
         {activeTab === 'sos' && (
           <div className="main-workspace-grid sos-view">
             <section className="map-panel-area">
@@ -344,7 +373,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
           </div>
         )}
 
-        {/* Panel 3: Assist (Rear Camera Continuous Optical Displacement Differencing) */}
+        {/* Panel 4: Assist (Rear Camera Continuous Optical Displacement Differencing) */}
         {activeTab === 'assist' && (
           <div className="assist-view-container">
             <AssistPanel
@@ -358,7 +387,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
           </div>
         )}
 
-        {/* Panel 4: SOS Dispatch Log History */}
+        {/* Panel 5: SOS Dispatch Log History */}
         {activeTab === 'dispatch_log' && (
           <div className="dispatch-log-view-container">
             <div className="dispatch-log-dedicated-banner">
@@ -382,7 +411,7 @@ export default function Dashboard({ onNavigateToSosLogs }) {
           </div>
         )}
 
-        {/* Panel 5: Unified Command View (Side-by-Side Map + SOS & Assist) */}
+        {/* Panel 6: Unified Command View (Side-by-Side Map + SOS & Detect & Assist) */}
         {activeTab === 'unified' && (
           <div className="unified-grid-all">
             <div className="unified-map-column">
@@ -400,6 +429,11 @@ export default function Dashboard({ onNavigateToSosLogs }) {
             </div>
 
             <div className="unified-companion-column">
+              <PiezoPanel
+                zoneName={currentZoneName}
+                onPiezoStateChange={setPiezoState}
+              />
+
               <SosPanel
                 zoneName={currentZoneName}
                 centerLat={parseFloat(lat)}

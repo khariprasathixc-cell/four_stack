@@ -10,6 +10,7 @@ export default function StatusBar({
   sosState,
   cameraState,
   motionLevel,
+  piezoState = 'standby',
   isBackendConnected,
 }) {
   const riskClass =
@@ -29,6 +30,13 @@ export default function StatusBar({
       ? 'pill-monitoring'
       : 'pill-standby';
 
+  const piezoClass =
+    piezoState === 'alert'
+      ? 'pill-motion-alert'
+      : piezoState === 'monitoring'
+      ? 'pill-monitoring'
+      : 'pill-standby';
+
   return (
     <div className="persistent-status-bar" id="system-status-bar">
       <div className="status-bar-container">
@@ -38,8 +46,10 @@ export default function StatusBar({
           <span className="status-section-label">SYSTEM STATE:</span>
           <span className="status-active-badge">
             {activePanel === 'predict' && '🛰️ Phase 1: Predict (Active)'}
-            {activePanel === 'sos' && '🚨 Phase 2: SOS Geofence (Active)'}
-            {activePanel === 'assist' && '📹 Phase 3: Assist Vision (Active)'}
+            {activePanel === 'detect' && '⚡ Phase 2: Piezo Detect (Active)'}
+            {activePanel === 'sos' && '🚨 Phase 3: SOS Geofence (Active)'}
+            {activePanel === 'assist' && '📹 Phase 4: Assist Vision (Active)'}
+            {activePanel === 'dispatch_log' && '📋 SOS Dispatch Logs (Active)'}
             {activePanel === 'unified' && '🎛️ Unified Command (All Active)'}
           </span>
         </div>
@@ -64,7 +74,19 @@ export default function StatusBar({
             </span>
           </div>
 
-          {/* 3. Camera Assist */}
+          {/* 3. Piezo Acoustic Detect */}
+          <div className="telemetry-item" title="27mm Piezoelectric Contact Acoustic Telemetry (3.5mm Mic)">
+            <span className="telemetry-label">Piezo:</span>
+            <span className={`telemetry-value ${piezoClass}`}>
+              {piezoState === 'alert'
+                ? '🚨 CRACK DETECTED'
+                : piezoState === 'monitoring'
+                ? '🟢 Monitoring'
+                : '⚪ Standby'}
+            </span>
+          </div>
+
+          {/* 4. Camera Assist */}
           <div className="telemetry-item" title="Optical Displacement Detection">
             <span className="telemetry-label">Camera:</span>
             <span className={`telemetry-value ${cameraClass}`}>
@@ -76,7 +98,7 @@ export default function StatusBar({
             </span>
           </div>
 
-          {/* 4. Engine Connectivity */}
+          {/* 5. Engine Connectivity */}
           <div className="telemetry-item engine-item">
             <span className="telemetry-label">Engine:</span>
             <span className="telemetry-value">
