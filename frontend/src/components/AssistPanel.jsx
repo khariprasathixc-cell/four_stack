@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../config';
 
-export default function AssistPanel({
+function AssistPanel({
   zoneName = 'Target Region',
   centerLat = 11.554,
   centerLon = 76.1306,
@@ -491,7 +491,7 @@ export default function AssistPanel({
           ) : (
             <div className="log-list">
               {motionEvents.map((evt, idx) => (
-                <div key={idx} className="log-entry">
+                <div key={evt.id || `${evt.time}-${evt.displacement}-${idx}`} className="log-entry">
                   <span className="log-badge-alert">⚠️ SHIFT</span>
                   <span className="log-time">{evt.time}</span>
                   <span className="log-displacement">Displacement: {evt.displacement}%</span>
@@ -507,3 +507,5 @@ export default function AssistPanel({
     </div>
   );
 }
+
+export default React.memo(AssistPanel);

@@ -379,45 +379,60 @@ async def receive_citizen_panic_alert(request: CitizenPanicRequest) -> Dict[str,
     Saves to active panic feed and registers in SOS dispatch audit logs.
     """
     now_ts = datetime.now(timezone.utc).isoformat()
-    alert_id = f"PANIC-CITIZEN-{int(time.time()*1000)}"
+    is_panic = (request.source or "").lower() == "citizen_panic"
+    prefix = "PANIC" if is_panic else "CHECKIN"
+    alert_id = f"{prefix}-CITIZEN-{int(time.time()*1000)}"
+    clean_phone = request.phone or "+91 99999 99999"
+    status_label = "DISPATCHED" if is_panic else "CHECKED_IN"
     
     alert_entry = {
         "id": alert_id,
-        "name": request.name or "Citizen On-Slope",
-        "phone": request.phone or "+91 99999 99999",
+        "name": request.name or ("Citizen Mobile User" if not is_panic else "Citizen On-Slope"),
+        "phone": clean_phone,
         "lat": request.lat,
         "lon": request.lon,
         "zoneName": request.zoneName or "Active Mountain Zone",
         "riskLevel": request.riskLevel or "High",
         "userDistanceKm": request.userDistanceKm,
-        "status": "DISPATCHED",
+        "status": status_label,
         "timestamp": now_ts,
-        "source": "citizen_panic"
+        "source": request.source or "citizen_panic"
     }
     
-    CITIZEN_PANIC_RECORDS.insert(0, alert_entry)
-    if len(CITIZEN_PANIC_RECORDS) > 50:
-        CITIZEN_PANIC_RECORDS.pop()
+    # Update existing citizen entry if same phone, else insert at top
+    found_idx = -1
+    for i, c in enumerate(CITIZEN_PANIC_RECORDS):
+        if c.get("phone") == clean_phone:
+            found_idx = i
+            break
+            
+    if found_idx >= 0:
+        CITIZEN_PANIC_RECORDS[found_idx] = alert_entry
+    else:
+        CITIZEN_PANIC_RECORDS.insert(0, alert_entry)
+        if len(CITIZEN_PANIC_RECORDS) > 50:
+            CITIZEN_PANIC_RECORDS.pop()
 
-    # Log to persistent SOS dispatch store
-    try:
-        save_sos_log_entry({
-            "timestamp": now_ts,
-            "recipient": request.phone or "CITIZEN-GPS",
-            "zone": request.zoneName or "Active Mountain Zone",
-            "risk_level": request.riskLevel or "High",
-            "message_id": alert_id,
-            "http_status": 200,
-            "response_type": "citizen_panic",
-            "mode": "citizen_panic_broadcast",
-            "geofence_radius_km": 5.0,
-            "user_distance_km": request.userDistanceKm,
-            "alert_body": f"[CITIZEN DISTRESS SIGNAL] Panic triggered at GPS ({request.lat:.4f}, {request.lon:.4f}) in {request.zoneName}. Emergency response active."
-        })
-    except Exception as log_err:
-        logger.error(f"[Panic Log Error]: {log_err}")
+    # Log panic distress alerts to persistent SOS store
+    if is_panic:
+        try:
+            save_sos_log_entry({
+                "timestamp": now_ts,
+                "recipient": clean_phone,
+                "zone": request.zoneName or "Active Mountain Zone",
+                "risk_level": request.riskLevel or "High",
+                "message_id": alert_id,
+                "http_status": 200,
+                "response_type": "citizen_panic",
+                "mode": "citizen_panic_broadcast",
+                "geofence_radius_km": 5.0,
+                "user_distance_km": request.userDistanceKm,
+                "alert_body": f"[CITIZEN DISTRESS SIGNAL] Panic triggered at GPS ({request.lat:.4f}, {request.lon:.4f}) in {request.zoneName}. Emergency response active."
+            })
+        except Exception as log_err:
+            logger.error(f"[Panic Log Error]: {log_err}")
 
-    logger.info(f"[Citizen Panic Received] {alert_id} at ({request.lat}, {request.lon}) from {request.name}")
+    logger.info(f"[{'Citizen Panic' if is_panic else 'Citizen Check-in'}] {alert_id} at ({request.lat}, {request.lon}) from {request.name}")
 
     return {
         "success": True,
@@ -426,7 +441,8 @@ async def receive_citizen_panic_alert(request: CitizenPanicRequest) -> Dict[str,
         "lat": request.lat,
         "lon": request.lon,
         "zoneName": request.zoneName,
-        "message": "Emergency distress signal acknowledged and dispatched to Ranger Command Center."
+        "status": status_label,
+        "message": "Distress signal acknowledged and dispatched to Ranger Command Center." if is_panic else "Citizen check-in registered with Ranger Command Center."
     }
 
 

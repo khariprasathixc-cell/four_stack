@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 
-export default function DispatchLogPanel({
+function DispatchLogPanel({
   logs = [],
   onClearLogs,
   onNavigateToSos,
@@ -213,14 +213,14 @@ export default function DispatchLogPanel({
         </div>
       ) : (
         <div className="log-list-container">
-          {filteredLogs.map((entry) => {
+          {filteredLogs.map((entry, idx) => {
             const isLive = entry.mode === 'live_msg91';
             const isBreach = entry.userDistanceKm != null && entry.userDistanceKm <= (entry.geofenceRadiusKm || 5);
             const isExpanded = expandedLogId === entry.id;
 
             return (
               <div
-                key={entry.id}
+                key={entry.id || entry.messageId || `${entry.timestamp}-${idx}`}
                 className={`log-record-card ${isLive ? 'record-live' : 'record-mock'} ${isBreach ? 'record-breach' : ''}`}
               >
                 <div className="record-header">
@@ -297,3 +297,5 @@ export default function DispatchLogPanel({
     </div>
   );
 }
+
+export default React.memo(DispatchLogPanel);

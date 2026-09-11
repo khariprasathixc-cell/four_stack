@@ -16,7 +16,7 @@ function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-export default function SosPanel({
+function SosPanel({
   zoneName,
   centerLat,
   centerLon,
@@ -409,3 +409,5 @@ export default function SosPanel({
     </div>
   );
 }
+
+export default React.memo(SosPanel);

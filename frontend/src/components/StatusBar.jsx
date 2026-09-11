@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function StatusBar({
+function StatusBar({
   activePanel,
   zoneName,
   lat,
@@ -114,3 +114,5 @@ export default function StatusBar({
     </div>
   );
 }
+
+export default React.memo(StatusBar);

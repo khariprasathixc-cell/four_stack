@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function SidePanel({ riskData, isLoading, piezoState = 'standby' }) {
+function SidePanel({ riskData, isLoading, piezoState = 'standby', sensors: overrideSensors }) {
   if (isLoading) {
     return (
       <aside className="side-panel loading-state">
@@ -23,7 +23,8 @@ export default function SidePanel({ riskData, isLoading, piezoState = 'standby' 
     );
   }
 
-  const { overall_risk, summary, rainfall, terrain, geojson, sensors = [] } = riskData;
+  const { overall_risk, summary, rainfall, terrain, geojson } = riskData;
+  const sensors = overrideSensors || riskData.sensors || [];
   const meta = geojson?.metadata || {};
   const riskCounts = meta.final_risk_counts || { Low: 0, Medium: 0, High: 0 };
   const totalCells = meta.total_cells || 1;
@@ -42,31 +43,31 @@ export default function SidePanel({ riskData, isLoading, piezoState = 'standby' 
   const overallClass =
     overall_risk === 'High' ? 'risk-high' : overall_risk === 'Medium' ? 'risk-med' : 'risk-low';
 
-  // Process live sensor state for PZ-01
+  // Process live sensor state for PZ-01 and dynamic cascading grid states
   const processedSensors = sensors.map((s) => {
     const isLive = s.is_live === true || s.id === 'PZ-01';
     const effectivePiezo = isLive
-      ? piezoState === 'alert'
-        ? 'Alert'
-        : 'Normal'
+      ? (s.piezo_risk || (piezoState === 'alert' ? 'Alert' : 'Normal'))
       : s.piezo_risk || 'Normal';
 
     const isPiezoAlert = effectivePiezo === 'Alert';
     const isRainHigh = (s.rainfall_risk || rainfall?.rainfall_risk) === 'High';
     const isRainElevated = ['Medium', 'High'].includes(s.rainfall_risk || rainfall?.rainfall_risk);
 
-    let level = 'Low';
-    let label = 'Safe';
-    let color = '#10b981';
+    let level = s.status_level || 'Low';
+    let label = s.status_label || (level === 'High' ? 'Warning' : level === 'Medium' ? 'Watch' : 'Safe');
+    let color = s.status_color || (level === 'High' ? '#ef4444' : level === 'Medium' ? '#f59e0b' : '#10b981');
 
-    if (isPiezoAlert && isRainHigh) {
-      level = 'High';
-      label = 'Warning';
-      color = '#ef4444';
-    } else if (isPiezoAlert || isRainElevated) {
-      level = 'Medium';
-      label = 'Watch';
-      color = '#f59e0b';
+    if (!s.status_level) {
+      if (isPiezoAlert && isRainHigh) {
+        level = 'High';
+        label = 'Warning';
+        color = '#ef4444';
+      } else if (isPiezoAlert || isRainElevated) {
+        level = 'Medium';
+        label = 'Watch';
+        color = '#f59e0b';
+      }
     }
 
     return {
@@ -197,7 +198,7 @@ export default function SidePanel({ riskData, isLoading, piezoState = 'standby' 
                 const isRaining = item.precipitation_mm > 0;
                 return (
                   <div
-                    key={idx}
+                    key={item.time || idx}
                     className={`trend-bar-col ${isRaining ? 'has-rain' : ''}`}
                     title={`${item.time}: ${item.precipitation_mm}mm`}
                   >
@@ -286,3 +287,5 @@ export default function SidePanel({ riskData, isLoading, piezoState = 'standby' 
     </aside>
   );
 }
+
+export default React.memo(SidePanel);

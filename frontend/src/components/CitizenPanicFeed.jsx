@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../config';
 
-export default function CitizenPanicFeed({ onSelectCoordinates }) {
+function CitizenPanicFeed({ onSelectCoordinates }) {
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const fetchAlerts = async () => {
     try {
-      const resp = await fetch(`${API_BASE_URL}/api/citizen-alerts`);
+      const resp = await fetch(`${API_BASE_URL}/citizen-alerts`);
       if (resp.ok) {
         const data = await resp.json();
         if (Array.isArray(data)) {
@@ -56,8 +56,8 @@ export default function CitizenPanicFeed({ onSelectCoordinates }) {
             No active citizen distress signals in perimeter.
           </div>
         ) : (
-          alerts.map((a) => (
-            <div key={a.id} className="panic-feed-item">
+          alerts.map((a, idx) => (
+            <div key={a.id || `${a.lat}-${a.lon}-${idx}`} className="panic-feed-item">
               <div className="panic-feed-left">
                 <div className="panic-feed-name-row">
                   <span className="panic-feed-name">{a.name}</span>
@@ -87,3 +87,5 @@ export default function CitizenPanicFeed({ onSelectCoordinates }) {
     </div>
   );
 }
+
+export default React.memo(CitizenPanicFeed);

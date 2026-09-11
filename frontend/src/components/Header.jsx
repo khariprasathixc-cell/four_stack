@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function Header({
+function Header({
   health,
   isBackendConnected,
   piezoState = 'standby',
@@ -79,3 +79,5 @@ export default function Header({
     </header>
   );
 }
+
+export default React.memo(Header);

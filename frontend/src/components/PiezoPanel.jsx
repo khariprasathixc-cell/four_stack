@@ -6,9 +6,11 @@ const DEFAULT_SENSITIVITY_K = 3.5;      // Mean + k * standard deviation
 const DEFAULT_NOISE_GATE = 0.035;       // Minimum threshold floor to prevent triggers in dead silence
 const DEFAULT_COOLDOWN_MS = 750;        // Debounce tail decay time
 
-export default function PiezoPanel({
+function PiezoPanel({
   zoneName = 'Target Zone',
   onPiezoStateChange,
+  onPiezoTrigger,
+  regionalRainfallRisk = 'High',
 }) {
   // Capture state: 'standby' | 'monitoring' | 'alert' | 'simulated'
   const [captureStatus, setCaptureStatus] = useState('standby');
@@ -20,6 +22,12 @@ export default function PiezoPanel({
   const [rollingStdDev, setRollingStdDev] = useState(0);
   const [currentThreshold, setCurrentThreshold] = useState(0.1);
   const [isSpikeActive, setIsSpikeActive] = useState(false);
+
+  // Refs for high-frequency telemetry throttling & trigger notification
+  const lastTelemetryUpdateRef = useRef(0);
+  const currentThresholdRef = useRef(0.1);
+  const rollingMeanRef = useRef(0);
+  const lastTriggerNotifyTimeRef = useRef(0);
 
   // Adjustable detection sensitivity
   const [sensitivityK, setSensitivityK] = useState(DEFAULT_SENSITIVITY_K);
@@ -200,8 +208,6 @@ export default function PiezoPanel({
       if (val > maxAbs) maxAbs = val;
     }
 
-    setInstantAmplitude(maxAbs);
-
     // 2. Maintain rolling history of frame amplitudes (~2.5 seconds = 150 frames @ 60fps)
     const history = amplitudeHistoryRef.current;
     history.push(maxAbs);
@@ -224,13 +230,21 @@ export default function PiezoPanel({
 
     // 4. Calculate adaptive threshold: mean + k * stdDev
     const computedThreshold = Math.max(mean + sensitivityK * stdDev, noiseGate);
-    setRollingMean(mean);
-    setRollingStdDev(stdDev);
-    setCurrentThreshold(computedThreshold);
+    currentThresholdRef.current = computedThreshold;
+    rollingMeanRef.current = mean;
 
     // 5. Spike detection & debounce/cooldown logic
     const now = Date.now();
     const isOverThreshold = maxAbs > computedThreshold;
+
+    // Part 1 Fix: Throttle React state telemetry updates to ~10Hz (every 100ms) or when threshold is crossed
+    if (isOverThreshold || now - lastTelemetryUpdateRef.current >= 100) {
+      lastTelemetryUpdateRef.current = now;
+      setInstantAmplitude(maxAbs);
+      setRollingMean(mean);
+      setRollingStdDev(stdDev);
+      setCurrentThreshold(computedThreshold);
+    }
 
     if (isOverThreshold) {
       if (!spikeStartTimeRef.current) {
@@ -251,6 +265,22 @@ export default function PiezoPanel({
         const peakAmp = peakAmplitudeInCurrentSpikeRef.current;
         const snr = (peakAmp / (mean || 0.001)).toFixed(1);
 
+        // Compute fusion diagnosis
+        const isRainHigh = String(regionalRainfallRisk).toLowerCase() === 'high';
+        const isSevere = peakAmp >= 2.0 * computedThreshold;
+        let ruleTag = 'PIEZO ADVISORY';
+        let ruleDiagnosis = 'Minor acoustic anomaly';
+        if (isRainHigh && peakAmp > computedThreshold) {
+          ruleTag = 'RULE A (RAIN+PIEZO FUSED)';
+          ruleDiagnosis = `Rule A: Acoustic crack breach (${(peakAmp * 100).toFixed(1)}% > ${(computedThreshold * 100).toFixed(1)}%) + High Rainfall Saturation`;
+        } else if (isSevere) {
+          ruleTag = 'RULE B (PIEZO SEVERE ALONE)';
+          ruleDiagnosis = `Rule B: High-energy acoustic shock (${(peakAmp * 100).toFixed(1)}% >= 2x ${(computedThreshold * 100).toFixed(1)}%) alone without rainfall confirmation`;
+        } else if (peakAmp > computedThreshold) {
+          ruleTag = 'PIEZO SPIKE';
+          ruleDiagnosis = `Acoustic transient breach (${(peakAmp * 100).toFixed(1)}% > ${(computedThreshold * 100).toFixed(1)}%) under ${regionalRainfallRisk} rain`;
+        }
+
         const newEvent = {
           id: `piezo_${now}_${Math.floor(Math.random() * 1000)}`,
           timestamp: new Date().toISOString(),
@@ -260,6 +290,8 @@ export default function PiezoPanel({
           snr_ratio: Number(snr),
           duration_ms: durationMs > 0 ? durationMs : 24,
           severity: peakAmp > 0.55 ? 'CRITICAL' : peakAmp > 0.25 ? 'WARNING' : 'ADVISORY',
+          fusion_rule: ruleTag,
+          diagnosis: ruleDiagnosis,
         };
 
         setEvents((prev) => {
@@ -269,6 +301,22 @@ export default function PiezoPanel({
           } catch {}
           return updated;
         });
+
+        // Notify parent dashboard for Part 2 cascading escalation and Part 3 real-time fusion logic
+        if (now - lastTriggerNotifyTimeRef.current > 400) {
+          lastTriggerNotifyTimeRef.current = now;
+          if (onPiezoTrigger) {
+            onPiezoTrigger({
+              peakAmplitude: peakAmp,
+              threshold: computedThreshold,
+              mean,
+              severity: newEvent.severity,
+              isSimulated: captureStatus === 'simulated' || simulationBufferRef.current !== null,
+              ruleTag,
+              ruleDiagnosis,
+            });
+          }
+        }
 
         // Clear spike active state after brief display duration
         setTimeout(() => {
@@ -814,10 +862,12 @@ export default function PiezoPanel({
                 </tr>
               </thead>
               <tbody>
-                {events.map((evt) => {
+                {events.map((evt, idx) => {
                   const isCrit = evt.severity === 'CRITICAL';
+                  const isRuleA = evt.fusion_rule && evt.fusion_rule.includes('RULE A');
+                  const isRuleB = evt.fusion_rule && evt.fusion_rule.includes('RULE B');
                   return (
-                    <tr key={evt.id} className={isCrit ? 'row-critical' : 'row-warning'}>
+                    <tr key={evt.id || `${evt.timestamp}-${idx}`} className={isCrit ? 'row-critical' : 'row-warning'}>
                       <td className="cell-time">
                         <span className="time-val">
                           {new Date(evt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -849,11 +899,33 @@ export default function PiezoPanel({
                         </span>
                       </td>
                       <td className="cell-diagnosis">
-                        {evt.peak_amplitude > 0.6
-                          ? 'High-energy shear rupture transient'
-                          : evt.peak_amplitude > 0.3
-                          ? 'Subsurface micro-crack acoustic emission'
-                          : 'Minor acoustic anomaly'}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                          {evt.fusion_rule && (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                alignSelf: 'flex-start',
+                                padding: '2px 6px',
+                                borderRadius: '4px',
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                letterSpacing: '0.03em',
+                                background: isRuleA ? 'rgba(239, 68, 68, 0.22)' : isRuleB ? 'rgba(245, 158, 11, 0.22)' : 'rgba(56, 189, 248, 0.15)',
+                                color: isRuleA ? '#f87171' : isRuleB ? '#fbbf24' : '#38bdf8',
+                                border: `1px solid ${isRuleA ? '#ef4444' : isRuleB ? '#f59e0b' : '#38bdf8'}`,
+                              }}
+                            >
+                              {evt.fusion_rule}
+                            </span>
+                          )}
+                          <span>
+                            {evt.diagnosis || (evt.peak_amplitude > 0.6
+                              ? 'High-energy shear rupture transient'
+                              : evt.peak_amplitude > 0.3
+                              ? 'Subsurface micro-crack acoustic emission'
+                              : 'Minor acoustic anomaly')}
+                          </span>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -866,3 +938,5 @@ export default function PiezoPanel({
     </div>
   );
 }
+
+export default React.memo(PiezoPanel);

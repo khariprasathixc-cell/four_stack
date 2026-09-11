@@ -311,7 +311,7 @@ export default function SosLogsPage({ onNavigateToDashboard }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((entry) => {
+                {filtered.map((entry, idx) => {
                   const isLive = entry.mode === 'live_msg91';
                   const isBreach =
                     entry.user_distance_km != null &&
@@ -319,7 +319,7 @@ export default function SosLogsPage({ onNavigateToDashboard }) {
                   const isExpanded = expandedId === entry.id;
 
                   return (
-                    <React.Fragment key={entry.id}>
+                    <React.Fragment key={entry.id || entry.message_id || `${entry.timestamp}-${idx}`}>
                       <tr className={`${isLive ? 'row-live' : 'row-mock'} ${isBreach ? 'row-breach' : ''}`}>
                         <td className="cell-time">
                           <span className="time-primary">

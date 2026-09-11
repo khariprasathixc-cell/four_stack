@@ -126,16 +126,49 @@ function generateRealisticHillshadeDataUrl(geojsonData) {
       const ridgeBoost = curvature < -1.5 ? Math.min(0.28, Math.abs(curvature) * 0.04) : 0;
       const ravineShadow = curvature > 1.5 ? Math.min(0.25, curvature * 0.035) : 0;
 
-      // Hypsometric terrain base color
+      // Deterministic pseudo-random noise dithering on color ramp to eliminate flat color banding
       const normElev = Math.max(0, Math.min(1, (elev - minElev) / elevRange));
-      const baseCol = interpolatePalette(normElev);
+      const dither = (((Math.sin(px * 12.9898 + py * 78.233) * 43758.5453) % 1) - 0.5) * 0.038;
+      const ditheredElev = Math.max(0, Math.min(1, normElev + dither));
+      const baseCol = interpolatePalette(ditheredElev);
 
-      // Blend steep slopes (>20°) toward rugged exposed rock slate & cliffs
+      // 1. Deep Valley & Channel Shading (darker montane green/blue in low-elevation drainage channels)
+      if (normElev < 0.40 || curvature > 0.9) {
+        const valleyFactor = Math.max(0, Math.min(1, (0.40 - normElev) / 0.40 + (curvature > 0.9 ? 0.28 : 0)));
+        baseCol.r = Math.floor(baseCol.r * (1 - valleyFactor * 0.42) + 14 * (valleyFactor * 0.42));
+        baseCol.g = Math.floor(baseCol.g * (1 - valleyFactor * 0.26) + 36 * (valleyFactor * 0.26));
+        baseCol.b = Math.floor(baseCol.b * (1 - valleyFactor * 0.18) + 48 * (valleyFactor * 0.18));
+      }
+
+      // 2. Ridgelines: drawn as slightly darker contour strokes following elevation gradient directions & convex spurs
+      const isConvexRidge = curvature < -1.2;
+      const contourInterval = 26.0; // meters
+      const distToContour = Math.abs((elev % contourInterval) - (contourInterval / 2));
+      const isContourBand = distToContour < 1.0;
+
+      if (isConvexRidge || (slopeDeg > 16 && isContourBand)) {
+        const ridgeStroke = isConvexRidge && isContourBand ? 0.35 : isConvexRidge ? 0.22 : 0.14;
+        baseCol.r = Math.floor(baseCol.r * (1 - ridgeStroke) + 32 * ridgeStroke);
+        baseCol.g = Math.floor(baseCol.g * (1 - ridgeStroke) + 36 * ridgeStroke);
+        baseCol.b = Math.floor(baseCol.b * (1 - ridgeStroke) + 42 * ridgeStroke);
+      }
+
+      // 3. Peak Highlighting: luminous near-white/frost highlights on summits and upper ridges
+      if (normElev > 0.74) {
+        const peakFactor = Math.min(1.0, (normElev - 0.74) / 0.26);
+        const sunlitFactor = totalIllumination > 0.35 ? 1.25 : 0.8;
+        const whiteBlend = Math.min(0.85, peakFactor * 0.76 * sunlitFactor);
+        baseCol.r = Math.floor(baseCol.r * (1 - whiteBlend) + 248 * whiteBlend);
+        baseCol.g = Math.floor(baseCol.g * (1 - whiteBlend) + 250 * whiteBlend);
+        baseCol.b = Math.floor(baseCol.b * (1 - whiteBlend) + 255 * whiteBlend);
+      }
+
+      // 4. Blend steep slopes (>20°) toward rugged exposed rock slate & cliffs
       if (slopeDeg > 20) {
         const rockFactor = Math.min(0.72, (slopeDeg - 20) / 26.0);
-        baseCol.r = baseCol.r * (1 - rockFactor) + 95 * rockFactor;
-        baseCol.g = baseCol.g * (1 - rockFactor) + 92 * rockFactor;
-        baseCol.b = baseCol.b * (1 - rockFactor) + 90 * rockFactor;
+        baseCol.r = Math.floor(baseCol.r * (1 - rockFactor) + 95 * rockFactor);
+        baseCol.g = Math.floor(baseCol.g * (1 - rockFactor) + 92 * rockFactor);
+        baseCol.b = Math.floor(baseCol.b * (1 - rockFactor) + 90 * rockFactor);
       }
 
       // Procedural micro-texture modulation
@@ -307,7 +340,7 @@ function computePointStatus(rainfallRisk, piezoRisk) {
   }
 }
 
-export default function RiskMap({
+function RiskMap({
   geojsonData,
   sensors = [],
   piezoState = 'standby',
@@ -320,6 +353,8 @@ export default function RiskMap({
   riskLevel = 'High',
   userGps = null,
   zoneName = '',
+  variant = 'ranger', // 'ranger' | 'citizen'
+  onResetGridBaseline,
 }) {
   const mapContainerRef = useRef(null);
   const mapInstanceRef = useRef(null);
@@ -328,6 +363,7 @@ export default function RiskMap({
   const hillshadeLayerRef = useRef(null);
   const hazardContourLayerRef = useRef(null);
   const sensorMarkersGroupRef = useRef(null);
+  const markersByIdRef = useRef(new Map());
   const centerMarkerRef = useRef(null);
   const geofenceCircleRef = useRef(null);
   const userGpsMarkerRef = useRef(null);
@@ -370,6 +406,9 @@ export default function RiskMap({
     }
 
     return () => {
+      if (markersByIdRef.current) {
+        markersByIdRef.current.clear();
+      }
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -377,7 +416,12 @@ export default function RiskMap({
     };
   }, []);
 
-  // Compute live updated sensors array (wiring PZ-01 to real live hardware state)
+  // Part 1 Optimization: Memoize hillshade raster canvas so it is NEVER recalculated on sensor updates
+  const hillshadeDataUrl = useMemo(() => {
+    return generateRealisticHillshadeDataUrl(geojsonData);
+  }, [geojsonData]);
+
+  // Compute live updated sensors array (wiring PZ-01 to real live hardware state and respecting dynamic cascades)
   const computedSensors = useMemo(() => {
     if (!sensors || sensors.length === 0) return [];
     const rainRisk = rainfallData?.rainfall_risk || (riskLevel === 'High' ? 'High' : 'Medium');
@@ -385,15 +429,19 @@ export default function RiskMap({
 
     return sensors.map((s) => {
       const isLiveNode = s.is_live === true || s.id === 'PZ-01';
-      // If live node, bind to live hardware mic/audio detection state
+      // If live node, bind to live hardware mic/audio detection state unless state is provided
       const effectivePiezo = isLiveNode
-        ? piezoState === 'alert'
-          ? 'Alert'
-          : 'Normal'
+        ? (s.piezo_risk || (piezoState === 'alert' ? 'Alert' : 'Normal'))
         : s.piezo_risk || 'Normal';
 
       const effectiveRain = s.rainfall_risk || rainRisk;
-      const fusion = computePointStatus(effectiveRain, effectivePiezo);
+      const fusion = s.status_level ? {
+        level: s.status_level,
+        label: s.status_label || (s.status_level === 'High' ? 'High Risk / Landslide Warning' : s.status_level === 'Medium' ? 'Elevated Watch' : 'Safe / Normal'),
+        color: s.status_color || (s.status_level === 'High' ? '#ef4444' : s.status_level === 'Medium' ? '#f59e0b' : '#10b981'),
+        code: s.status_code || (s.status_level === 'High' ? 'warning' : s.status_level === 'Medium' ? 'watch' : 'safe'),
+        reason: s.status_reason || (s.status_level === 'High' ? 'High Landslide Risk' : s.status_level === 'Medium' ? 'Elevated Watch' : 'Safe Baseline'),
+      } : computePointStatus(effectiveRain, effectivePiezo);
 
       return {
         ...s,
@@ -406,6 +454,7 @@ export default function RiskMap({
         status_color: fusion.color,
         status_code: fusion.code,
         status_reason: fusion.reason,
+        justEscalated: Boolean(s.justEscalated),
       };
     });
   }, [sensors, piezoState, rainfallData, riskLevel]);
@@ -421,44 +470,24 @@ export default function RiskMap({
 
   const hasRedAlert = sensorStats.High > 0;
 
-  // Main Map Layers & Markers Render Loop
+  // -------------------------------------------------------------
+  // Effect 1: Base Terrain & Hillshade Layers (Decoupled from sensors)
+  // -------------------------------------------------------------
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map) return;
 
-    // 1. Remove previous dynamic layers
     if (hillshadeLayerRef.current) {
       map.removeLayer(hillshadeLayerRef.current);
       hillshadeLayerRef.current = null;
-    }
-    if (hazardContourLayerRef.current) {
-      map.removeLayer(hazardContourLayerRef.current);
-      hazardContourLayerRef.current = null;
     }
     if (geojsonLayerRef.current) {
       map.removeLayer(geojsonLayerRef.current);
       geojsonLayerRef.current = null;
     }
-    if (centerMarkerRef.current) {
-      map.removeLayer(centerMarkerRef.current);
-      centerMarkerRef.current = null;
-    }
-    if (geofenceCircleRef.current) {
-      map.removeLayer(geofenceCircleRef.current);
-      geofenceCircleRef.current = null;
-    }
-    if (userGpsMarkerRef.current) {
-      map.removeLayer(userGpsMarkerRef.current);
-      userGpsMarkerRef.current = null;
-    }
-    if (sensorMarkersGroupRef.current) {
-      sensorMarkersGroupRef.current.clearLayers();
-    }
 
-    // 2. Render Enhanced 2D Mountain Multi-Directional Relief Canvas Layer
     const boundsMeta = geojsonData?.metadata?.bounds;
     if (boundsMeta && (activeLayerMode === 'relief' || activeLayerMode === 'fused_grid')) {
-      const hillshadeDataUrl = generateRealisticHillshadeDataUrl(geojsonData);
       if (hillshadeDataUrl) {
         const imageBounds = [
           [boundsMeta.south, boundsMeta.west],
@@ -472,26 +501,8 @@ export default function RiskMap({
         }).addTo(map);
         hillshadeLayerRef.current = overlay;
       }
-
-      // 2b. Render Distinct Contoured Danger Zone Highlight Layer (Pulsing Red Hazard Aura)
-      if (hasRedAlert) {
-        const hazardDataUrl = generateContourHazardOverlayDataUrl(geojsonData, computedSensors);
-        if (hazardDataUrl) {
-          const imageBounds = [
-            [boundsMeta.south, boundsMeta.west],
-            [boundsMeta.north, boundsMeta.east],
-          ];
-          const hazardOverlay = L.imageOverlay(hazardDataUrl, imageBounds, {
-            opacity: 0.85,
-            interactive: false,
-            className: 'hazard-zone-pulsing-overlay',
-          }).addTo(map);
-          hazardContourLayerRef.current = hazardOverlay;
-        }
-      }
     }
 
-    // 3. Render GeoJSON Hazard Cells
     if (geojsonData && geojsonData.features && geojsonData.features.length > 0) {
       const isReliefMode = activeLayerMode === 'relief';
       const isTerrainMode = activeLayerMode === 'terrain_slope';
@@ -538,128 +549,66 @@ export default function RiskMap({
       }).addTo(map);
 
       geojsonLayerRef.current = layer;
+
+      try {
+        const layerBounds = layer.getBounds();
+        if (layerBounds.isValid()) {
+          map.fitBounds(layerBounds, { padding: [30, 30], maxZoom: 15 });
+        }
+      } catch (e) {}
+    }
+  }, [geojsonData, activeLayerMode, hillshadeDataUrl]);
+
+  // -------------------------------------------------------------
+  // Effect 2: Hazard Contoured Aura (Decoupled)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (hazardContourLayerRef.current) {
+      map.removeLayer(hazardContourLayerRef.current);
+      hazardContourLayerRef.current = null;
     }
 
-    // 4. Render Distributed Multi-Point Sensor Grid Overlay (3D Grounded Beacon Pins)
-    if (computedSensors && computedSensors.length > 0 && sensorMarkersGroupRef.current) {
-      // Find min/max elevation across sensors for realistic pseudo-perspective depth scaling
-      const elevs = computedSensors.map((s) => s.elevation_m || 1000);
-      const minSenElev = Math.min(...elevs);
-      const maxSenElev = Math.max(...elevs);
-      const elevSpan = Math.max(1, maxSenElev - minSenElev);
+    const boundsMeta = geojsonData?.metadata?.bounds;
+    if (hasRedAlert && boundsMeta && (activeLayerMode === 'relief' || activeLayerMode === 'fused_grid')) {
+      const hazardDataUrl = generateContourHazardOverlayDataUrl(geojsonData, computedSensors);
+      if (hazardDataUrl) {
+        const imageBounds = [
+          [boundsMeta.south, boundsMeta.west],
+          [boundsMeta.north, boundsMeta.east],
+        ];
+        const hazardOverlay = L.imageOverlay(hazardDataUrl, imageBounds, {
+          opacity: 0.85,
+          interactive: false,
+          className: 'hazard-zone-pulsing-overlay',
+        }).addTo(map);
+        hazardContourLayerRef.current = hazardOverlay;
+      }
+    }
+  }, [hasRedAlert, geojsonData, activeLayerMode, computedSensors]);
 
-      computedSensors.forEach((s) => {
-        const isLive = s.is_live;
-        const color = s.status_color || '#10b981';
-        const isAlert = s.status_level === 'High';
-        const isWatch = s.status_level === 'Medium';
+  // -------------------------------------------------------------
+  // Effect 3: Center Marker, Geofence, and User GPS Marker
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map) return;
 
-        // Normalized elevation: lower elevation = foreground (larger scale), higher elevation = distance (smaller scale)
-        const normElev = ((s.elevation_m || 1000) - minSenElev) / elevSpan;
-        const depthScale = (1.12 - normElev * 0.26).toFixed(2); // Scales between 0.86 (summit) and 1.12 (valley foreground)
-
-        const pinClass = isLive
-          ? 'beacon-pin live-beacon'
-          : isAlert
-          ? 'beacon-pin alert-beacon'
-          : isWatch
-          ? 'beacon-pin watch-beacon'
-          : 'beacon-pin safe-beacon';
-
-        // 3D Mountain Beacon Pin HTML with grounded drop shadow & beacon pole
-        const beaconHtml = `
-          <div class="mountain-beacon-wrapper" style="transform: scale(${depthScale});" title="${s.name} (${s.elevation_m}m)">
-            <div class="beacon-ground-shadow"></div>
-            <div class="${pinClass}">
-              <div class="beacon-head" style="background: ${isLive ? '#38bdf8' : color}; box-shadow: 0 0 12px ${isLive ? '#38bdf8' : color};">
-                <span class="beacon-dot"></span>
-                ${isAlert ? '<span class="beacon-danger-ping"></span>' : ''}
-                ${isLive ? '<span class="beacon-live-ping"></span>' : ''}
-              </div>
-              <div class="beacon-stem"></div>
-              <div class="beacon-base"></div>
-              <div class="beacon-label-tag ${isLive ? 'live-tag' : ''}">${s.id}</div>
-            </div>
-          </div>
-        `;
-
-        const beaconIcon = L.divIcon({
-          className: 'custom-mountain-beacon-icon',
-          html: beaconHtml,
-          iconSize: [36, 48],
-          iconAnchor: [18, 44],
-          popupAnchor: [0, -42],
-        });
-
-        const beaconMarker = L.marker([s.lat, s.lon], { icon: beaconIcon });
-
-        // Detailed Geotechnical Sensor Node Popup
-        const badgeClass =
-          s.status_level === 'High'
-            ? 'badge-high'
-            : s.status_level === 'Medium'
-            ? 'badge-med'
-            : 'badge-low';
-
-        const piezoBadge =
-          s.piezo_risk === 'Alert'
-            ? '<span class="status-tag tag-danger">⚡ SPIKE / CRACK ALERT</span>'
-            : '<span class="status-tag tag-normal">✅ Normal Vibration</span>';
-
-        const rainBadge =
-          s.rainfall_risk === 'High'
-            ? '<span class="status-tag tag-danger">🌧️ High Saturation</span>'
-            : s.rainfall_risk === 'Medium'
-            ? '<span class="status-tag tag-warning">🌧️ Moderate Rain</span>'
-            : '<span class="status-tag tag-normal">⛅ Low Rain</span>';
-
-        const popupHtml = `
-          <div class="sensor-popup-card">
-            <div class="sensor-popup-header">
-              <div class="sensor-tag-row">
-                <span class="sensor-type-pill ${isLive ? 'live-pill' : 'grid-pill'}">
-                  ${isLive ? '⚡ LIVE HARDWARE SENSOR' : '📡 TELEMETRY NODE'}
-                </span>
-                <span class="popup-risk-badge ${badgeClass}">${s.status_label}</span>
-              </div>
-              <h4 class="sensor-node-title">${s.name}</h4>
-              <div class="sensor-location-desc">📍 ${s.location_desc || 'Mountain Slope Position'}</div>
-            </div>
-
-            <div class="sensor-telemetry-body">
-              <div class="tel-row">
-                <span class="tel-name">Rainfall Risk:</span>
-                <span class="tel-value">${rainBadge} (${s.rainfall_24h_mm}mm / 24h)</span>
-              </div>
-              <div class="tel-row">
-                <span class="tel-name">Piezo Acoustic State:</span>
-                <span class="tel-value">${piezoBadge}</span>
-              </div>
-              <div class="tel-row">
-                <span class="tel-name">Terrain Topography:</span>
-                <span class="tel-value">📐 Slope: <strong>${s.slope_deg}°</strong> • 🏔️ Elev: <strong>${s.elevation_m}m</strong></span>
-              </div>
-              <div class="tel-fusion-box">
-                <div class="fusion-box-title">⚡ Point Fusion Assessment:</div>
-                <div class="fusion-box-desc">${s.status_reason}</div>
-              </div>
-            </div>
-
-            <div class="sensor-popup-footer">
-              <span>Coords: ${s.lat.toFixed(4)}°, ${s.lon.toFixed(4)}°</span>
-              <span>Updated: ${new Date(s.last_updated).toLocaleTimeString()}</span>
-            </div>
-          </div>
-        `;
-
-        beaconMarker.bindPopup(popupHtml, { maxWidth: 330, className: 'custom-sensor-leaflet-popup' });
-        beaconMarker.on('click', () => setSelectedSensorId(s.id));
-
-        sensorMarkersGroupRef.current.addLayer(beaconMarker);
-      });
+    if (centerMarkerRef.current) {
+      map.removeLayer(centerMarkerRef.current);
+      centerMarkerRef.current = null;
+    }
+    if (geofenceCircleRef.current) {
+      map.removeLayer(geofenceCircleRef.current);
+      geofenceCircleRef.current = null;
+    }
+    if (userGpsMarkerRef.current) {
+      map.removeLayer(userGpsMarkerRef.current);
+      userGpsMarkerRef.current = null;
     }
 
-    // 5. Render Center Target Marker
     if (centerLat && centerLon) {
       const marker = L.circleMarker([centerLat, centerLon], {
         radius: 6,
@@ -680,7 +629,6 @@ export default function RiskMap({
       centerMarkerRef.current = marker;
     }
 
-    // 6. Render Geofence Circle if enabled
     if (forceGeofenceVisible && centerLat && centerLon && geofenceRadiusKm > 0) {
       const radiusMeters = geofenceRadiusKm * 1000;
       const geofenceColor =
@@ -706,122 +654,295 @@ export default function RiskMap({
       geofenceCircleRef.current = circle;
     }
 
-    // 7. Render User GPS Marker if verified
     if (userGps && userGps.lat && userGps.lon) {
-      const userMarker = L.circleMarker([userGps.lat, userGps.lon], {
-        radius: 9,
-        fillColor: userGps.isInside ? '#ef4444' : '#06b6d4',
-        color: '#ffffff',
-        weight: 3,
-        opacity: 1,
-        fillOpacity: 0.95,
-        className: 'user-gps-pulse',
-      }).addTo(map);
+      const isInside = userGps.isInside;
+      const userMarkerHtml = `
+        <div class="user-gps-marker ${isInside ? 'breach' : 'safe'}">
+          <div class="gps-pulse"></div>
+          <div class="gps-core-dot">📍</div>
+          <div class="gps-label-tag">You (${userGps.distanceKm != null ? `${userGps.distanceKm.toFixed(1)}km` : 'Here'})</div>
+        </div>
+      `;
+
+      const userGpsIcon = L.divIcon({
+        className: 'custom-user-gps-icon',
+        html: userMarkerHtml,
+        iconSize: [32, 40],
+        iconAnchor: [16, 38],
+        popupAnchor: [0, -36],
+      });
+
+      const userMarker = L.marker([userGps.lat, userGps.lon], { icon: userGpsIcon }).addTo(map);
 
       userMarker.bindPopup(`
-        <div class="map-center-popup">
-          <strong>📱 Verified Mobile GPS</strong><br/>
-          <span>Lat: ${userGps.lat.toFixed(4)}°, Lon: ${userGps.lon.toFixed(4)}°</span><br/>
-          <span>Distance to Slope: <strong>${userGps.distanceKm != null ? userGps.distanceKm.toFixed(2) : '--'} km</strong></span><br/>
-          <span style="color: ${userGps.isInside ? '#ef4444' : '#10b981'}; font-weight: bold;">
-            ${userGps.isInside ? '⚠️ INSIDE GEOFENCE' : '✅ Outside Hazard Perimeter'}
-          </span>
+        <div class="map-user-popup ${isInside ? 'breach' : 'safe'}">
+          <strong>${isInside ? '⚠️ HAZARD ZONE BREACH' : '✅ SAFE LOCATION'}</strong><br/>
+          <span>Your verified position: ${userGps.lat.toFixed(4)}°, ${userGps.lon.toFixed(4)}°</span><br/>
+          <span>Distance to Epicenter: <strong>${userGps.distanceKm != null ? userGps.distanceKm.toFixed(2) : '--'} km</strong></span><br/>
+          <span>Geofence Threshold: <strong>${geofenceRadiusKm} km</strong></span>
         </div>
       `);
+
       userGpsMarkerRef.current = userMarker;
     }
+  }, [centerLat, centerLon, geofenceRadiusKm, forceGeofenceVisible, riskLevel, userGps, zoneName]);
 
-    // Fit bounds smoothly
-    try {
-      if (forceGeofenceVisible && geofenceCircleRef.current) {
-        const circleBounds = geofenceCircleRef.current.getBounds();
-        map.fitBounds(circleBounds, { padding: [40, 40], maxZoom: 14 });
-      } else if (geojsonLayerRef.current) {
-        const bounds = geojsonLayerRef.current.getBounds();
-        if (bounds.isValid()) {
-          map.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
-        }
-      }
-      setTimeout(() => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.invalidateSize();
-        }
-      }, 150);
-    } catch (err) {
-      console.warn('Could not fit map bounds:', err);
+  // -------------------------------------------------------------
+  // Effect 4: In-Place Persistent Sensor Markers (Eliminates Churn & Flickering)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !sensorMarkersGroupRef.current) return;
+
+    if (!computedSensors || computedSensors.length === 0) {
+      sensorMarkersGroupRef.current.clearLayers();
+      markersByIdRef.current.clear();
+      return;
     }
-  }, [
-    geojsonData,
-    computedSensors,
-    activeLayerMode,
-    centerLat,
-    centerLon,
-    radiusKm,
-    geofenceRadiusKm,
-    forceGeofenceVisible,
-    riskLevel,
-    userGps,
-    zoneName,
-    hasRedAlert,
-  ]);
+
+    const elevs = computedSensors.map((s) => s.elevation_m || 1000);
+    const minSenElev = Math.min(...elevs);
+    const maxSenElev = Math.max(...elevs);
+    const elevSpan = Math.max(1, maxSenElev - minSenElev);
+
+    const currentSensorIds = new Set();
+
+    computedSensors.forEach((s) => {
+      currentSensorIds.add(s.id);
+      const isLive = s.is_live;
+      const color = s.status_color || '#10b981';
+      const isAlert = s.status_level === 'High';
+      const isWatch = s.status_level === 'Medium';
+      const isJustEscalated = Boolean(s.justEscalated);
+
+      const normElev = ((s.elevation_m || 1000) - minSenElev) / elevSpan;
+      const depthScale = (1.12 - normElev * 0.26).toFixed(2);
+
+      const pinClass = isLive
+        ? 'beacon-pin live-beacon'
+        : isAlert
+        ? 'beacon-pin alert-beacon'
+        : isWatch
+        ? 'beacon-pin watch-beacon'
+        : 'beacon-pin safe-beacon';
+
+      const beaconHtml = `
+        <div class="mountain-beacon-wrapper ${isJustEscalated ? 'beacon-escalated-pulse' : ''}" style="transform: scale(${depthScale});" title="${s.name} (${s.elevation_m}m)">
+          <div class="beacon-ground-shadow"></div>
+          <div class="${pinClass}">
+            <div class="beacon-head" style="background: ${isLive ? '#38bdf8' : color}; box-shadow: 0 0 12px ${isLive ? '#38bdf8' : color};">
+              <span class="beacon-dot"></span>
+              ${isAlert ? '<span class="beacon-danger-ping"></span>' : ''}
+              ${isLive ? '<span class="beacon-live-ping"></span>' : ''}
+              ${isJustEscalated ? '<span class="beacon-just-escalated-ping"></span>' : ''}
+            </div>
+            <div class="beacon-stem"></div>
+            <div class="beacon-base"></div>
+            <div class="beacon-label-tag ${isLive ? 'live-tag' : ''}">${s.id}</div>
+          </div>
+        </div>
+      `;
+
+      const beaconIcon = L.divIcon({
+        className: 'custom-mountain-beacon-icon',
+        html: beaconHtml,
+        iconSize: [36, 48],
+        iconAnchor: [18, 44],
+        popupAnchor: [0, -42],
+      });
+
+      const badgeClass =
+        s.status_level === 'High'
+          ? 'badge-high'
+          : s.status_level === 'Medium'
+          ? 'badge-med'
+          : 'badge-low';
+
+      const piezoBadge =
+        s.piezo_risk === 'Alert'
+          ? '<span class="status-tag tag-danger">⚡ SPIKE / CRACK ALERT</span>'
+          : '<span class="status-tag tag-normal">✅ Normal Vibration</span>';
+
+      const rainBadge =
+        s.rainfall_risk === 'High'
+          ? '<span class="status-tag tag-danger">🌧️ High Saturation</span>'
+          : s.rainfall_risk === 'Medium'
+          ? '<span class="status-tag tag-warning">🌧️ Moderate Rain</span>'
+          : '<span class="status-tag tag-normal">⛅ Low Rain</span>';
+
+      const popupHtml = `
+        <div class="sensor-popup-card">
+          <div class="sensor-popup-header">
+            <div class="sensor-tag-row">
+              <span class="sensor-type-pill ${isLive ? 'live-pill' : 'grid-pill'}">
+                ${isLive ? '⚡ LIVE HARDWARE SENSOR' : '📡 TELEMETRY NODE'}
+              </span>
+              <span class="popup-risk-badge ${badgeClass}">${s.status_label}</span>
+            </div>
+            <h4 class="sensor-node-title">${s.name}</h4>
+            <div class="sensor-location-desc">📍 ${s.location_desc || 'Mountain Slope Position'}</div>
+          </div>
+
+          <div class="sensor-telemetry-body">
+            <div class="tel-row">
+              <span class="tel-name">Rainfall Risk:</span>
+              <span class="tel-value">${rainBadge} (${s.rainfall_24h_mm}mm / 24h)</span>
+            </div>
+            <div class="tel-row">
+              <span class="tel-name">Piezo Acoustic State:</span>
+              <span class="tel-value">${piezoBadge}</span>
+            </div>
+            <div class="tel-row">
+              <span class="tel-name">Terrain Topography:</span>
+              <span class="tel-value">📐 Slope: <strong>${s.slope_deg}°</strong> • 🏔️ Elev: <strong>${s.elevation_m}m</strong></span>
+            </div>
+            <div class="tel-fusion-box">
+              <div class="fusion-box-title">⚡ Point Fusion Assessment:</div>
+              <div class="fusion-box-desc">${s.status_reason}</div>
+            </div>
+          </div>
+
+          <div class="sensor-popup-footer">
+            <span>Coords: ${s.lat.toFixed(4)}°, ${s.lon.toFixed(4)}°</span>
+            <span>Updated: ${new Date(s.last_updated || Date.now()).toLocaleTimeString()}</span>
+          </div>
+        </div>
+      `;
+
+      const citizenPopupHtml = `
+        <div class="sensor-popup-card citizen-popup-simple">
+          <div class="sensor-popup-header">
+            <span class="popup-risk-badge ${badgeClass}">${s.status_label}</span>
+            <h4 class="sensor-node-title" style="margin-top: 6px;">${s.name.replace(/\(.*?\)/g, '').trim()}</h4>
+            <div class="sensor-location-desc">📍 ${s.location_desc || 'Mountain Sector'}</div>
+          </div>
+          <div class="citizen-popup-advice" style="padding: 10px 14px; font-size: 13px; line-height: 1.5; color: #f1f5f9;">
+            ${s.status_level === 'High'
+              ? '🚨 <strong>DANGER AREA:</strong> High landslide hazard detected on this slope sector. Evacuation to stable high ground advised. Call 112 for NDRF rescue.'
+              : s.status_level === 'Medium'
+              ? '⚠️ <strong>ELEVATED WATCH:</strong> Saturated slope conditions under heavy rainfall. Avoid stream beds.'
+              : '🛡️ <strong>STABLE SECTOR:</strong> Slope is stable with nominal baseline vibration.'}
+          </div>
+          <div class="sensor-popup-footer">
+            <span>Slope: <strong>${s.slope_deg}°</strong></span>
+            <span>Elevation: <strong>${s.elevation_m}m</strong></span>
+          </div>
+        </div>
+      `;
+
+      const activePopup = variant === 'citizen' ? citizenPopupHtml : popupHtml;
+
+      // In-Place Update or Creation: Avoids DOM unmount/remount glitches
+      if (markersByIdRef.current.has(s.id)) {
+        const existingMarker = markersByIdRef.current.get(s.id);
+        existingMarker.setIcon(beaconIcon);
+        existingMarker.setPopupContent(activePopup);
+        existingMarker.setLatLng([s.lat, s.lon]);
+      } else {
+        const newMarker = L.marker([s.lat, s.lon], { icon: beaconIcon });
+        newMarker.bindPopup(activePopup, { maxWidth: 330, className: 'custom-sensor-leaflet-popup' });
+        newMarker.on('click', () => setSelectedSensorId(s.id));
+        sensorMarkersGroupRef.current.addLayer(newMarker);
+        markersByIdRef.current.set(s.id, newMarker);
+      }
+    });
+
+    // Remove any stale markers
+    markersByIdRef.current.forEach((marker, id) => {
+      if (!currentSensorIds.has(id)) {
+        sensorMarkersGroupRef.current.removeLayer(marker);
+        markersByIdRef.current.delete(id);
+      }
+    });
+  }, [computedSensors, variant]);
+
+  const isCitizen = variant === 'citizen';
 
   return (
-    <div className="risk-map-wrapper">
-      {/* 1. Map Layer & Mode Selector Toolbar */}
-      <div className="map-layer-selector">
-        <span className="selector-label">Mountain View:</span>
-        <button
-          className={`layer-toggle-btn ${activeLayerMode === 'relief' ? 'active' : ''}`}
-          onClick={() => setActiveLayerMode('relief')}
-          title="2D Realistic Mountain Relief + Contour Hazard Highlight"
-        >
-          🏔️ 2D Realistic Relief
-        </button>
-        <button
-          className={`layer-toggle-btn ${activeLayerMode === 'fused_grid' ? 'active' : ''}`}
-          onClick={() => setActiveLayerMode('fused_grid')}
-          title="Combined Terrain & Rainfall Risk Grid Polygons"
-        >
-          ⚡ Fused Grid
-        </button>
-        <button
-          className={`layer-toggle-btn ${activeLayerMode === 'terrain_slope' ? 'active' : ''}`}
-          onClick={() => setActiveLayerMode('terrain_slope')}
-          title="SRTM Slope Angle Hazards"
-        >
-          📐 Slope Hazards
-        </button>
-        <button
-          className={`layer-toggle-btn geofence-toggle ${forceGeofenceVisible ? 'active' : ''}`}
-          onClick={() => setForceGeofenceVisible(!forceGeofenceVisible)}
-        >
-          {forceGeofenceVisible ? `🛡️ Geofence (${geofenceRadiusKm}km) ON` : '🛡️ Show Geofence'}
-        </button>
-      </div>
-
-      {/* 2. Sensor Network Status HUD Overlay */}
-      <div className="map-sensor-hud">
-        <div className="hud-title-row">
-          <span className="hud-icon">📡</span>
-          <span className="hud-title">Slope Sensor Network ({computedSensors.length} Nodes)</span>
+    <div className={`risk-map-wrapper ${isCitizen ? 'citizen-variant' : ''}`}>
+      {/* 1. Toolbar / Header */}
+      {!isCitizen ? (
+        <div className="map-layer-selector">
+          <span className="selector-label">Mountain View:</span>
+          <button
+            className={`layer-toggle-btn ${activeLayerMode === 'relief' ? 'active' : ''}`}
+            onClick={() => setActiveLayerMode('relief')}
+            title="2D Realistic Mountain Relief + Contour Hazard Highlight"
+          >
+            🏔️ 2D Realistic Relief
+          </button>
+          <button
+            className={`layer-toggle-btn ${activeLayerMode === 'fused_grid' ? 'active' : ''}`}
+            onClick={() => setActiveLayerMode('fused_grid')}
+            title="Combined Terrain & Rainfall Risk Grid Polygons"
+          >
+            ⚡ Fused Grid
+          </button>
+          <button
+            className={`layer-toggle-btn ${activeLayerMode === 'terrain_slope' ? 'active' : ''}`}
+            onClick={() => setActiveLayerMode('terrain_slope')}
+            title="SRTM Slope Angle Hazards"
+          >
+            📐 Slope Hazards
+          </button>
+          <button
+            className={`layer-toggle-btn geofence-toggle ${forceGeofenceVisible ? 'active' : ''}`}
+            onClick={() => setForceGeofenceVisible(!forceGeofenceVisible)}
+          >
+            {forceGeofenceVisible ? `🛡️ Geofence (${geofenceRadiusKm}km) ON` : '🛡️ Show Geofence'}
+          </button>
+          {onResetGridBaseline && (
+            <button
+              type="button"
+              className="layer-toggle-btn reset-grid-btn"
+              onClick={onResetGridBaseline}
+              title="Reset sensor grid to baseline state"
+              style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#38bdf8' }}
+            >
+              🔄 Reset Grid
+            </button>
+          )}
         </div>
-        <div className="hud-counts-row">
-          <div className={`hud-stat warning ${hasRedAlert ? 'pulse-alert-hud' : ''}`}>
-            <span className="hud-dot red"></span>
-            <span>{sensorStats.High} Landslide Warning</span>
+      ) : (
+        <div className="citizen-map-header-bar">
+          <div className="citizen-map-title-row">
+            <span className="citizen-map-icon">🏔️</span>
+            <div>
+              <h4 className="citizen-map-title">Mountain Slope Hazard Map</h4>
+              <span className="citizen-map-sub">{zoneName || 'Monitored Mountain Slope'} • Tap pins for advisory</span>
+            </div>
           </div>
-          <div className="hud-stat watch">
-            <span className="hud-dot yellow"></span>
-            <span>{sensorStats.Medium} Watch</span>
+          <span className={`citizen-map-badge ${hasRedAlert ? 'danger' : 'safe'}`}>
+            {hasRedAlert ? '🚨 DANGER ZONE ACTIVE' : '🛡️ STABLE ZONE'}
+          </span>
+        </div>
+      )}
+
+      {/* 2. Sensor Network Status HUD Overlay (Ranger view only) */}
+      {!isCitizen && (
+        <div className="map-sensor-hud">
+          <div className="hud-title-row">
+            <span className="hud-icon">📡</span>
+            <span className="hud-title">Slope Sensor Network ({computedSensors.length} Nodes)</span>
           </div>
-          <div className="hud-stat safe">
-            <span className="hud-dot green"></span>
-            <span>{sensorStats.Low} Safe</span>
+          <div className="hud-counts-row">
+            <div className={`hud-stat warning ${hasRedAlert ? 'pulse-alert-hud' : ''}`}>
+              <span className="hud-dot red"></span>
+              <span>{sensorStats.High} Landslide Warning</span>
+            </div>
+            <div className="hud-stat watch">
+              <span className="hud-dot yellow"></span>
+              <span>{sensorStats.Medium} Watch</span>
+            </div>
+            <div className="hud-stat safe">
+              <span className="hud-dot green"></span>
+              <span>{sensorStats.Low} Safe</span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* 3. Active Landslide Hazard Zone Banner (Only visible when Red alert active) */}
+      {/* 3. Active Landslide Hazard Zone Banner */}
       {hasRedAlert && (
         <div className="active-danger-zone-badge">
           <span className="danger-zone-icon">🚨</span>
@@ -832,31 +953,34 @@ export default function RiskMap({
       )}
 
       {/* 4. Leaflet Map Container */}
-      <div id="risk-map-container" ref={mapContainerRef} className="map-container"></div>
+      <div id={`risk-map-container-${variant}`} ref={mapContainerRef} className="map-container"></div>
 
-      {/* 5. Enhanced Legend */}
-      <div className="map-legend">
-        <div className="legend-title">Realistic Mountain Relief & Sensor Fusion</div>
+      {/* 5. Legend */}
+      <div className={`map-legend ${isCitizen ? 'citizen-legend' : ''}`}>
+        <div className="legend-title">{isCitizen ? 'Slope Safety Legend' : 'Realistic Mountain Relief & Sensor Fusion'}</div>
         <div className="legend-items">
           <div className="legend-item">
             <span className="legend-color high"></span>
-            <span><strong>Red:</strong> Landslide Warning (Pulsing Hazard Zone Contour)</span>
+            <span><strong>Red:</strong> {isCitizen ? 'High Hazard Zone (Evacuate)' : 'Landslide Warning (Pulsing Hazard Contour)'}</span>
           </div>
           <div className="legend-item">
             <span className="legend-color medium"></span>
-            <span><strong>Yellow:</strong> Elevated Watch (Normal Calm Relief)</span>
+            <span><strong>Yellow:</strong> {isCitizen ? 'Elevated Watch (Stay Alert)' : 'Elevated Watch (Saturated Ground)'}</span>
           </div>
           <div className="legend-item">
             <span className="legend-color low"></span>
-            <span><strong>Green:</strong> Safe / Baseline (Normal Calm Relief)</span>
+            <span><strong>Green:</strong> {isCitizen ? 'Safe / Baseline' : 'Safe / Baseline (Nominal Slope)'}</span>
           </div>
-          <div className="legend-item live-legend-item">
-            <span className="legend-live-icon">⚡</span>
-            <span><strong>Node PZ-01:</strong> Live Physical Piezo Sensor (Audio Mic-In)</span>
-          </div>
+          {!isCitizen && (
+            <div className="legend-item live-legend-item">
+              <span className="legend-live-icon">⚡</span>
+              <span><strong>Node PZ-01:</strong> Live Physical Piezo Sensor (Audio Mic-In)</span>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
+export default React.memo(RiskMap);

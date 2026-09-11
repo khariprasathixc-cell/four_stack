@@ -21,7 +21,7 @@ const PRESETS = [
   },
 ];
 
-export default function ControlBar({
+function ControlBar({
   lat,
   lon,
   radius,
@@ -124,3 +124,5 @@ export default function ControlBar({
     </div>
   );
 }
+
+export default React.memo(ControlBar);
