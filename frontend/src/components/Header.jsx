@@ -5,6 +5,8 @@ export default function Header({
   isBackendConnected,
   piezoState = 'standby',
   cameraState = 'standby',
+  onOpenBulkBroadcast,
+  onNavigateToCitizen,
 }) {
   return (
     <header className="app-header">
@@ -13,15 +15,38 @@ export default function Header({
         <div>
           <div className="brand-title-row">
             <h1 className="brand-title">Slope-to-Rescue</h1>
-            <span className="phase-pill">End-to-End Early Warning System</span>
+            <span className="phase-pill">Ranger Command Center</span>
           </div>
           <p className="brand-subtitle">
-            Early Warning Landslide Intelligence • Acoustic Micro-Crack Detection & Rapid SOS Rescue
+            Early Warning Landslide Intelligence • Distributed Sensor Grid • Citizen Rescue Dispatch
           </p>
         </div>
       </div>
 
       <div className="header-actions">
+        {onOpenBulkBroadcast && (
+          <button
+            type="button"
+            className="btn-cam-action danger"
+            onClick={onOpenBulkBroadcast}
+            style={{ fontWeight: 700, padding: '7px 14px', borderRadius: '8px' }}
+            title="Dispatch emergency bulk SMS evacuation broadcast to all citizens in danger zone"
+          >
+            📢 Bulk SMS Broadcast
+          </button>
+        )}
+
+        {onNavigateToCitizen && (
+          <button
+            type="button"
+            className="role-switch-header-btn"
+            onClick={onNavigateToCitizen}
+            title="Switch to Mobile-First Citizen Safety View"
+          >
+            📱 Citizen Mobile Portal
+          </button>
+        )}
+
         <div className="status-indicators">
           <div className="status-item">
             <span

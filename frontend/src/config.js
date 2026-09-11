@@ -13,4 +13,7 @@ export const API_BASE = rawBase.endsWith('/api')
   ? rawBase
   : (rawBase === '' ? '/api' : `${rawBase}/api`);
 
+export const API_BASE_URL = API_BASE;
+
 export default API_BASE;
+

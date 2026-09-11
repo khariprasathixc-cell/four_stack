@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function SidePanel({ riskData, isLoading }) {
+export default function SidePanel({ riskData, isLoading, piezoState = 'standby' }) {
   if (isLoading) {
     return (
       <aside className="side-panel loading-state">
@@ -23,7 +23,7 @@ export default function SidePanel({ riskData, isLoading }) {
     );
   }
 
-  const { overall_risk, summary, rainfall, terrain, geojson } = riskData;
+  const { overall_risk, summary, rainfall, terrain, geojson, sensors = [] } = riskData;
   const meta = geojson?.metadata || {};
   const riskCounts = meta.final_risk_counts || { Low: 0, Medium: 0, High: 0 };
   const totalCells = meta.total_cells || 1;
@@ -42,6 +42,43 @@ export default function SidePanel({ riskData, isLoading }) {
   const overallClass =
     overall_risk === 'High' ? 'risk-high' : overall_risk === 'Medium' ? 'risk-med' : 'risk-low';
 
+  // Process live sensor state for PZ-01
+  const processedSensors = sensors.map((s) => {
+    const isLive = s.is_live === true || s.id === 'PZ-01';
+    const effectivePiezo = isLive
+      ? piezoState === 'alert'
+        ? 'Alert'
+        : 'Normal'
+      : s.piezo_risk || 'Normal';
+
+    const isPiezoAlert = effectivePiezo === 'Alert';
+    const isRainHigh = (s.rainfall_risk || rainfall?.rainfall_risk) === 'High';
+    const isRainElevated = ['Medium', 'High'].includes(s.rainfall_risk || rainfall?.rainfall_risk);
+
+    let level = 'Low';
+    let label = 'Safe';
+    let color = '#10b981';
+
+    if (isPiezoAlert && isRainHigh) {
+      level = 'High';
+      label = 'Warning';
+      color = '#ef4444';
+    } else if (isPiezoAlert || isRainElevated) {
+      level = 'Medium';
+      label = 'Watch';
+      color = '#f59e0b';
+    }
+
+    return {
+      ...s,
+      is_live: isLive,
+      piezo_risk: effectivePiezo,
+      status_level: level,
+      status_label: label,
+      status_color: color,
+    };
+  });
+
   return (
     <aside className="side-panel">
       {/* 1. Overall Combined Risk Hero Card */}
@@ -57,7 +94,7 @@ export default function SidePanel({ riskData, isLoading }) {
 
         <div className="hero-risk-meta-pills">
           <span className="meta-pill">
-            High-Risk Zones: <strong>{riskCounts.High}</strong> ({highPct}%)
+            Active Sensors: <strong>{processedSensors.length} Nodes</strong>
           </span>
           <span className="meta-pill">
             Sectors Scanned: <strong>{totalCells}</strong>
@@ -65,7 +102,48 @@ export default function SidePanel({ riskData, isLoading }) {
         </div>
       </section>
 
-      {/* 2. Rainfall Intelligence Section */}
+      {/* 2. Distributed Sensor Grid Overview */}
+      {processedSensors.length > 0 && (
+        <section className="panel-card sensors-card">
+          <div className="card-header">
+            <div className="card-title-group">
+              <span className="card-icon">📡</span>
+              <div>
+                <h3>Slope Sensor Grid</h3>
+                <span className="card-sub">Multi-Point Acoustic & Rain Fusion</span>
+              </div>
+            </div>
+            <span className="sensor-count-badge">{processedSensors.length} Active Probes</span>
+          </div>
+
+          <div className="sensor-nodes-list">
+            {processedSensors.map((node) => (
+              <div key={node.id} className={`sensor-node-row status-${node.status_level.toLowerCase()}`}>
+                <div className="node-info">
+                  <div className="node-id-row">
+                    <span className="node-id-tag">{node.id}</span>
+                    {node.is_live && <span className="live-pill-mini">⚡ LIVE AUDIO PROBE</span>}
+                  </div>
+                  <div className="node-name">{node.name.replace(/\(.*?\)/g, '').trim()}</div>
+                  <div className="node-meta">
+                    📐 {node.slope_deg}° • 🏔️ {node.elevation_m}m • 🌧️ {node.rainfall_risk}
+                  </div>
+                </div>
+                <div className="node-status">
+                  <span
+                    className={`node-status-pill pill-${node.status_level.toLowerCase()}`}
+                    style={{ backgroundColor: `${node.status_color}22`, color: node.status_color, borderColor: node.status_color }}
+                  >
+                    {node.status_level === 'High' ? '🚨 WARNING' : node.status_level === 'Medium' ? '⚠️ WATCH' : '✅ SAFE'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 3. Rainfall Intelligence Section */}
       <section className="panel-card rainfall-card">
         <div className="card-header">
           <div className="card-title-group">
@@ -132,7 +210,7 @@ export default function SidePanel({ riskData, isLoading }) {
         )}
       </section>
 
-      {/* 3. Terrain Slope & Topography Section */}
+      {/* 4. Terrain Slope & Topography Section */}
       <section className="panel-card terrain-card">
         <div className="card-header">
           <div className="card-title-group">
@@ -197,12 +275,12 @@ export default function SidePanel({ riskData, isLoading }) {
         </div>
       </section>
 
-      {/* 4. Decision Rule Matrix Explainer */}
+      {/* 5. Fusion Rule Matrix Explainer */}
       <section className="panel-card matrix-card">
-        <h4>⚡ Fusion Decision Matrix</h4>
+        <h4>⚡ Point-Level Fusion Rule</h4>
         <p className="matrix-explanation">
-          Slope angle governs gravitational shear stress; antecedent rainfall governs pore-water pressure.
-          Slopes &gt;35° or hollow concavity under moderate-to-heavy rainfall trigger critical alert status.
+          Each sensor point monitors localized acoustic vibration + regional pore-pressure rainfall.
+          <strong> Red Warning</strong> is triggered only when <em>both</em> acoustic crack disturbance and heavy rainfall coincide at that point.
         </p>
       </section>
     </aside>

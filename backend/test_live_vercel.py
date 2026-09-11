@@ -58,15 +58,13 @@ if isinstance(logs, list):
     if logs:
         print(f"   -> Latest Log Entry ID: {logs[0].get('id')}, Mode: {logs[0].get('mode')}")
 
-# 5. All 5 Presets
+# 5. All 3 Presets
 presets = [
     ("Wayanad", 11.5540, 76.1306),
     ("Munnar", 10.0889, 77.0595),
     ("Darjeeling", 27.0410, 88.2663),
-    ("Amalfi", 40.6340, 14.6027),
-    ("Oso", 48.2770, -121.9160),
 ]
-print("\nTesting all 5 presets on live Vercel:")
+print("\nTesting all 3 presets on live Vercel:")
 for name, lat, lon in presets:
     pr = test_endpoint(f"Preset {name}", f"/api/risk?lat={lat}&lon={lon}&radius_km=3.0")
     if pr:

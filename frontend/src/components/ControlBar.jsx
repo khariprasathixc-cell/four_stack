@@ -19,18 +19,6 @@ const PRESETS = [
     lon: 88.2663,
     radius: 3.0,
   },
-  {
-    name: 'Amalfi Coast, Italy',
-    lat: 40.6340,
-    lon: 14.6027,
-    radius: 2.5,
-  },
-  {
-    name: 'Oso, Washington, USA',
-    lat: 48.2770,
-    lon: -121.9160,
-    radius: 3.0,
-  },
 ];
 
 export default function ControlBar({

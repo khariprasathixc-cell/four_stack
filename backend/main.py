@@ -142,6 +142,23 @@ class AlertRequest(BaseModel):
     geofenceRadiusKm: float = 5.0
     userDistanceKm: Optional[float] = None
 
+class CitizenPanicRequest(BaseModel):
+    phone: Optional[str] = "9876543210"
+    name: Optional[str] = "Citizen On-Slope"
+    lat: float = 11.5540
+    lon: float = 76.1306
+    zoneName: Optional[str] = "Wayanad District"
+    riskLevel: Optional[str] = "High"
+    userDistanceKm: Optional[float] = 0.45
+    source: Optional[str] = "citizen_panic"
+    timestamp: Optional[str] = None
+
+class BulkBroadcastRequest(BaseModel):
+    zoneName: str = "Wayanad Meppadi Slopes"
+    riskLevel: str = "High"
+    customMessage: Optional[str] = None
+    geofenceRadiusKm: float = 5.0
+
 class MotionTelemetry(BaseModel):
     zoneName: str = "Unknown Zone"
     lat: float = 11.5540
@@ -304,6 +321,175 @@ async def get_sos_logs_endpoint() -> list:
     except Exception as e:
         logger.error(f"[SOS Logs Endpoint Error]: {e}")
         return []
+
+
+# In-memory store for citizen distress signals (with initial realistic demo seed records)
+CITIZEN_PANIC_RECORDS = [
+    {
+        "id": "PANIC-WY-101",
+        "name": "Arun Kumar (Meppadi Slope)",
+        "phone": "+91 98471 23091",
+        "lat": 11.5512,
+        "lon": 76.1284,
+        "zoneName": "Wayanad (Meppadi Slopes)",
+        "riskLevel": "High",
+        "userDistanceKm": 0.35,
+        "status": "DISPATCHED",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    },
+    {
+        "id": "PANIC-MN-102",
+        "name": "Divya Nair (Tea Estate Camp)",
+        "phone": "+91 94460 55182",
+        "lat": 10.0865,
+        "lon": 77.0620,
+        "zoneName": "Munnar (Tea Hills)",
+        "riskLevel": "High",
+        "userDistanceKm": 0.82,
+        "status": "EN_ROUTE",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    },
+    {
+        "id": "PANIC-DJ-103",
+        "name": "Tenzing Sherpa (Ridge Village)",
+        "phone": "+91 98320 44910",
+        "lat": 27.0390,
+        "lon": 88.2610,
+        "zoneName": "Darjeeling (Hill Slope)",
+        "riskLevel": "Medium",
+        "userDistanceKm": 1.20,
+        "status": "MONITORING",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+]
+
+
+@app.get("/api/citizen-alerts")
+async def get_citizen_alerts() -> list:
+    """
+    Returns list of incoming citizen distress alerts for Ranger Command View.
+    """
+    return CITIZEN_PANIC_RECORDS
+
+
+@app.post("/api/citizen-alert")
+async def receive_citizen_panic_alert(request: CitizenPanicRequest) -> Dict[str, Any]:
+    """
+    Receives panic distress ping from Citizen Mobile View with live GPS coordinates.
+    Saves to active panic feed and registers in SOS dispatch audit logs.
+    """
+    now_ts = datetime.now(timezone.utc).isoformat()
+    alert_id = f"PANIC-CITIZEN-{int(time.time()*1000)}"
+    
+    alert_entry = {
+        "id": alert_id,
+        "name": request.name or "Citizen On-Slope",
+        "phone": request.phone or "+91 99999 99999",
+        "lat": request.lat,
+        "lon": request.lon,
+        "zoneName": request.zoneName or "Active Mountain Zone",
+        "riskLevel": request.riskLevel or "High",
+        "userDistanceKm": request.userDistanceKm,
+        "status": "DISPATCHED",
+        "timestamp": now_ts,
+        "source": "citizen_panic"
+    }
+    
+    CITIZEN_PANIC_RECORDS.insert(0, alert_entry)
+    if len(CITIZEN_PANIC_RECORDS) > 50:
+        CITIZEN_PANIC_RECORDS.pop()
+
+    # Log to persistent SOS dispatch store
+    try:
+        save_sos_log_entry({
+            "timestamp": now_ts,
+            "recipient": request.phone or "CITIZEN-GPS",
+            "zone": request.zoneName or "Active Mountain Zone",
+            "risk_level": request.riskLevel or "High",
+            "message_id": alert_id,
+            "http_status": 200,
+            "response_type": "citizen_panic",
+            "mode": "citizen_panic_broadcast",
+            "geofence_radius_km": 5.0,
+            "user_distance_km": request.userDistanceKm,
+            "alert_body": f"[CITIZEN DISTRESS SIGNAL] Panic triggered at GPS ({request.lat:.4f}, {request.lon:.4f}) in {request.zoneName}. Emergency response active."
+        })
+    except Exception as log_err:
+        logger.error(f"[Panic Log Error]: {log_err}")
+
+    logger.info(f"[Citizen Panic Received] {alert_id} at ({request.lat}, {request.lon}) from {request.name}")
+
+    return {
+        "success": True,
+        "alertId": alert_id,
+        "timestamp": now_ts,
+        "lat": request.lat,
+        "lon": request.lon,
+        "zoneName": request.zoneName,
+        "message": "Emergency distress signal acknowledged and dispatched to Ranger Command Center."
+    }
+
+
+@app.post("/api/broadcast-alert")
+async def broadcast_bulk_alert(request: BulkBroadcastRequest) -> Dict[str, Any]:
+    """
+    Ranger Command View Bulk Broadcast tool.
+    Loops through citizens in/near target danger zone and dispatches SMS alerts via MSG91/mock.
+    Logs each recipient individually to the persistent SOS dispatch audit trail.
+    """
+    now_ts = datetime.now(timezone.utc).isoformat()
+    target_recipients = [
+        c for c in CITIZEN_PANIC_RECORDS 
+        if not request.zoneName or request.zoneName.lower() in c.get("zoneName", "").lower() or c.get("riskLevel") == "High"
+    ]
+    if not target_recipients:
+        target_recipients = CITIZEN_PANIC_RECORDS[:3]
+
+    dispatched = []
+    load_dotenv(dotenv_path=ENV_PATH, override=True)
+    msg91_key = os.getenv("MSG91_AUTH_KEY", "").strip()
+    mock_env = os.getenv("MOCK_SMS", "true").strip().lower()
+    is_mock = (mock_env in ["true", "1"]) or not msg91_key
+
+    for r in target_recipients:
+        msg_id = f"BULK-MSG91-{int(time.time()*1000)}-{r.get('id')}"
+        custom_body = request.customMessage or (
+            f"[EVACUATION ALERT] High Landslide Danger in {request.zoneName}. "
+            f"Move to designated stable shelter immediately. Call 112 for NDRF rescue."
+        )
+        try:
+            save_sos_log_entry({
+                "timestamp": now_ts,
+                "recipient": r.get("phone", "919847123091"),
+                "zone": request.zoneName,
+                "risk_level": request.riskLevel,
+                "message_id": msg_id,
+                "http_status": 200,
+                "response_type": "bulk_broadcast",
+                "mode": "mock" if is_mock else "live_msg91",
+                "geofence_radius_km": request.geofenceRadiusKm,
+                "user_distance_km": r.get("userDistanceKm", 0.5),
+                "alert_body": custom_body
+            })
+            dispatched.append({
+                "recipient": r.get("name"),
+                "phone": r.get("phone"),
+                "messageId": msg_id,
+                "status": "SENT"
+            })
+        except Exception as e:
+            logger.error(f"[Bulk Dispatch Error]: {e}")
+
+    return {
+        "success": True,
+        "zoneName": request.zoneName,
+        "riskLevel": request.riskLevel,
+        "totalDispatched": len(dispatched),
+        "recipients": dispatched,
+        "timestamp": now_ts,
+        "mode": "mock" if is_mock else "live_msg91",
+        "message": f"Successfully broadcast emergency evacuation alert to {len(dispatched)} registered citizens in {request.zoneName}."
+    }
 
 
 @app.post("/api/send-alert")

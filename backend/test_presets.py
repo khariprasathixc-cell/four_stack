@@ -7,12 +7,10 @@ presets = [
     ("Wayanad", 11.5540, 76.1306, 3.0),
     ("Munnar", 10.0889, 77.0595, 3.0),
     ("Darjeeling", 27.0410, 88.2663, 3.0),
-    ("Amalfi", 40.6340, 14.6027, 2.5),
-    ("Oso", 48.2770, -121.9160, 3.0),
 ]
 
 async def test_all():
-    print("Testing all 5 presets with USE_MOCK_DATA=true:")
+    print("Testing all 3 presets with USE_MOCK_DATA=true:")
     for name, lat, lon, rad in presets:
         res = await evaluate_combined_risk(lat, lon, rad)
         rain_risk = res["rainfall"]["rainfall_risk"]
@@ -26,7 +24,7 @@ async def test_all():
         assert err_code is None
         assert cells > 0
         assert is_mock is True
-    print("\nAll 5 presets returned complete valid risk data with ZERO error codes!")
+    print("\nAll 3 presets returned complete valid risk data with ZERO error codes!")
 
 if __name__ == "__main__":
     asyncio.run(test_all())

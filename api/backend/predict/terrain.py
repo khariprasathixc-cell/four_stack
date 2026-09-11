@@ -18,13 +18,11 @@ logger = logging.getLogger(__name__)
 OPENTOPOGRAPHY_BASE_URL = "https://portal.opentopography.org/API/globaldem"
 MOCK_ELEV_DIR = Path(__file__).resolve().parent.parent / "mock_data" / "elevation_samples"
 
-# 5 Quick presets for matching coordinates
+# 3 Quick presets for matching coordinates
 PRESET_COORDS = [
     ("wayanad", 11.5540, 76.1306),
     ("munnar", 10.0889, 77.0595),
     ("darjeeling", 27.0410, 88.2663),
-    ("amalfi", 40.6340, 14.6027),
-    ("oso", 48.2770, -121.9160),
 ]
 
 # Terrain risk color codes
@@ -273,6 +271,9 @@ def grid_to_geojson(
             "avg_slope_deg": round(float(np.mean(slope_sub)), 1),
             "min_elevation_m": round(float(np.min(elevation_sub)), 1),
             "max_elevation_m": round(float(np.max(elevation_sub)), 1),
+            "bounds": {"south": south, "north": north, "west": west, "east": east},
+            "elevation_matrix": elevation_sub.round(1).tolist(),
+            "slope_matrix": slope_sub.round(1).tolist(),
         },
     }
 

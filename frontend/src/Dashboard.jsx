@@ -9,6 +9,8 @@ import SosPanel from './components/SosPanel';
 import AssistPanel from './components/AssistPanel';
 import DispatchLogPanel from './components/DispatchLogPanel';
 import PiezoPanel from './components/PiezoPanel';
+import CitizenPanicFeed from './components/CitizenPanicFeed';
+import BulkBroadcastModal from './components/BulkBroadcastModal';
 
 import { API_BASE } from './config';
 
@@ -16,8 +18,6 @@ const PRESET_NAMES_MAP = {
   '11.5540,76.1306': 'Wayanad, Kerala (High Hazard Zone)',
   '10.0889,77.0595': 'Munnar, Western Ghats',
   '27.0410,88.2663': 'Darjeeling, Himalayas',
-  '40.6340,14.6027': 'Amalfi Coast, Italy',
-  '48.2770,-121.9160': 'Oso, Washington, USA',
 };
 
 // Scaling geofence radius according to risk level
@@ -27,9 +27,10 @@ function computeGeofenceRadius(riskLevel) {
   return 1.0; // Low
 }
 
-export default function Dashboard({ onNavigateToSosLogs }) {
+export default function Dashboard({ onNavigateToSosLogs, onNavigateToCitizen }) {
   // Navigation tabs: 'predict' | 'sos' | 'assist' | 'dispatch_log' | 'unified'
   const [activeTab, setActiveTab] = useState('predict');
+  const [isBulkBroadcastOpen, setIsBulkBroadcastOpen] = useState(false);
 
   // Coordinates & target zone state (Predict is single source of truth)
   const [lat, setLat] = useState('11.5540');
@@ -191,12 +192,24 @@ export default function Dashboard({ onNavigateToSosLogs }) {
 
   return (
     <div className="app-layout unified-dashboard-layout">
-      {/* 1. Brand Header */}
+      {/* 1. Master Header with Live Connectivity */}
       <Header
         health={health}
         isBackendConnected={isBackendConnected}
         piezoState={piezoState}
         cameraState={cameraState}
+        onOpenBulkBroadcast={() => setIsBulkBroadcastOpen(true)}
+        onNavigateToCitizen={onNavigateToCitizen}
+      />
+
+      {/* Bulk Broadcast Modal (Ranger Command Tool) */}
+      <BulkBroadcastModal
+        isOpen={isBulkBroadcastOpen}
+        onClose={() => setIsBulkBroadcastOpen(false)}
+        activeZoneName={currentZoneName}
+        riskLevel={overallRisk}
+        geofenceRadiusKm={geofenceRadiusKm}
+        onBroadcastSuccess={fetchServerLogs}
       />
 
       {/* 2. Persistent Top-Level Combined System Status Bar */}
@@ -264,8 +277,8 @@ export default function Dashboard({ onNavigateToSosLogs }) {
           onClick={() => setActiveTab('dispatch_log')}
         >
           <span className="tab-icon">📋</span>
-          <span className="tab-text">5. SOS Log</span>
-          <span className="tab-pill log-count-pill">{sosLogs.length}</span>
+          <span className="tab-text">5. SOS Audit Log</span>
+          <span className="tab-pill">{sosLogs.length}</span>
         </button>
 
         <button
@@ -306,12 +319,15 @@ export default function Dashboard({ onNavigateToSosLogs }) {
           </div>
         )}
 
-        {/* Panel 1: Predict (Map + Gauges & Terrain Metrics) */}
+        {/* Panel 1: Predict (Map + Gauges & Terrain Metrics + Citizen Panic Feed) */}
         {activeTab === 'predict' && (
           <div className="main-workspace-grid predict-view">
             <section className="map-panel-area">
               <RiskMap
                 geojsonData={riskData?.geojson}
+                sensors={riskData?.sensors}
+                piezoState={piezoState}
+                rainfallData={riskData?.rainfall}
                 centerLat={parseFloat(lat)}
                 centerLon={parseFloat(lon)}
                 radiusKm={parseFloat(radius)}
@@ -323,8 +339,19 @@ export default function Dashboard({ onNavigateToSosLogs }) {
               />
             </section>
 
-            <section className="side-panel-area">
-              <SidePanel riskData={riskData} isLoading={isLoading} />
+            <section className="side-panel-area" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <SidePanel riskData={riskData} isLoading={isLoading} piezoState={piezoState} />
+              <CitizenPanicFeed
+                onSelectCoordinates={(pLat, pLon, pName) => {
+                  setUserGps({
+                    lat: pLat,
+                    lon: pLon,
+                    isInside: true,
+                    distanceKm: 0.35,
+                    accuracyM: 10,
+                  });
+                }}
+              />
             </section>
           </div>
         )}
@@ -345,6 +372,9 @@ export default function Dashboard({ onNavigateToSosLogs }) {
             <section className="map-panel-area">
               <RiskMap
                 geojsonData={riskData?.geojson}
+                sensors={riskData?.sensors}
+                piezoState={piezoState}
+                rainfallData={riskData?.rainfall}
                 centerLat={parseFloat(lat)}
                 centerLon={parseFloat(lon)}
                 radiusKm={parseFloat(radius)}
@@ -417,6 +447,9 @@ export default function Dashboard({ onNavigateToSosLogs }) {
             <div className="unified-map-column">
               <RiskMap
                 geojsonData={riskData?.geojson}
+                sensors={riskData?.sensors}
+                piezoState={piezoState}
+                rainfallData={riskData?.rainfall}
                 centerLat={parseFloat(lat)}
                 centerLon={parseFloat(lon)}
                 radiusKm={parseFloat(radius)}

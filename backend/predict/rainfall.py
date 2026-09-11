@@ -18,13 +18,11 @@ THRESHOLD_24H_MEDIUM = 25.0
 THRESHOLD_72H_HIGH = 120.0
 THRESHOLD_72H_MEDIUM = 50.0
 
-# 5 Quick presets for matching coordinates
+# 3 Quick presets for matching coordinates
 PRESET_COORDS = [
     ("wayanad", 11.5540, 76.1306),
     ("munnar", 10.0889, 77.0595),
     ("darjeeling", 27.0410, 88.2663),
-    ("amalfi", 40.6340, 14.6027),
-    ("oso", 48.2770, -121.9160),
 ]
 
 

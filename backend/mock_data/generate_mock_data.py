@@ -36,22 +36,6 @@ d_profile_24 = [
 ]
 darjeeling_vals = [round(x, 1) for x in (d_profile_48[:48] + d_profile_24)]
 
-# Amalfi Coast (Low Risk Scenario - Dry Mediterranean conditions)
-a_profile_48 = [0.1, 0.2, 0.0, 0.3] * 12
-a_profile_24 = [
-    0.0, 0.0, 0.1, 0.4, 0.6, 0.8, 0.5, 0.3, 0.1, 0.0, 0.0, 0.0,
-    0.0, 0.1, 0.2, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-]
-amalfi_vals = [round(x, 1) for x in (a_profile_48[:48] + a_profile_24)]
-
-# Oso, Washington (Medium Risk Scenario - Sustained saturation)
-o_profile_48 = [1.2, 1.4, 1.6, 1.3] * 12
-o_profile_24 = [
-    1.6, 2.0, 2.4, 3.1, 3.8, 4.4, 4.0, 3.5, 2.8, 2.3, 1.9, 1.6,
-    1.8, 2.1, 1.9, 1.5, 1.2, 1.0, 0.8, 0.7, 0.6, 0.4, 0.3, 0.2
-]
-oso_vals = [round(x, 1) for x in (o_profile_48[:48] + o_profile_24)]
-
 def build_rainfall_preset(name, lat, lon, vals):
     acc_24 = round(sum(vals[-24:]), 1)
     acc_72 = round(sum(vals[-72:]), 1)
@@ -90,14 +74,12 @@ rainfall_mock = {
     "wayanad": build_rainfall_preset("wayanad", 11.5540, 76.1306, wayanad_vals),
     "munnar": build_rainfall_preset("munnar", 10.0889, 77.0595, munnar_vals),
     "darjeeling": build_rainfall_preset("darjeeling", 27.0410, 88.2663, darjeeling_vals),
-    "amalfi": build_rainfall_preset("amalfi", 40.6340, 14.6027, amalfi_vals),
-    "oso": build_rainfall_preset("oso", 48.2770, -121.9160, oso_vals),
 }
 
 with open(OUT_DIR / "rainfall_samples.json", "w", encoding="utf-8") as f:
     json.dump(rainfall_mock, f, indent=2)
 
-print("Saved rainfall_samples.json")
+print("Saved rainfall_samples.json with 3 presets")
 
 # -------------------------------------------------------------
 # 2. ELEVATION SAMPLES (.npy grids)
@@ -150,16 +132,4 @@ grid_darjeeling = generate_topographic_grid(
 )
 np.save(ELEV_DIR / "darjeeling.npy", grid_darjeeling)
 
-# Amalfi Coast: Lattari mountain cliffs dropping to Mediterranean (20m - 980m)
-grid_amalfi = generate_topographic_grid(
-    base_elev=380.0, amplitude=420.0, frequency=1.2, gully_depth=240.0, resolution=24, ruggedness=1.3
-)
-np.save(ELEV_DIR / "amalfi.npy", grid_amalfi)
-
-# Oso, Washington: Glacial river valley terrace & scarp face (120m - 580m)
-grid_oso = generate_topographic_grid(
-    base_elev=260.0, amplitude=210.0, frequency=0.9, gully_depth=160.0, resolution=24, ruggedness=1.0
-)
-np.save(ELEV_DIR / "oso.npy", grid_oso)
-
-print("Generated and saved all 5 elevation grids to elevation_samples/ (.npy)")
+print("Generated and saved 3 elevation grids to elevation_samples/ (.npy)")

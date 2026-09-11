@@ -29,8 +29,11 @@ async def run_tests():
         risk_data = res.json()
         print(f"Overall risk: {risk_data.get('overall_risk')}, is_mock: {risk_data.get('is_mock')}")
         features_count = len(risk_data.get('geojson', {}).get('features', []))
-        print(f"GeoJSON features count: {features_count}")
+        sensors = risk_data.get('sensors', [])
+        print(f"GeoJSON features count: {features_count}, Distributed Sensors count: {len(sensors)}")
         assert features_count > 0, "No GeoJSON features generated!"
+        assert len(sensors) >= 6, f"Expected at least 6 sensor points, got {len(sensors)}"
+        assert any(s["is_live"] for s in sensors), "No live sensor point found in sensors array!"
 
         # 3. Send Alert check (Mock SMS)
         alert_payload = {
